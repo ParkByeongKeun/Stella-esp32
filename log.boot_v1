@@ -1,0 +1,266 @@
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3810,len:0x1994
+load:0x403c9700,len:0x4
+load:0x403c9704,len:0xfe0
+load:0x403cc700,len:0x2ebc
+SHA-256 comparison failed:
+Calculated: 9c469dd883329aff3b9d10213808a23e8364fd7e018c1f752b0ddecc09546515
+Expected: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+Attempting to boot anyway...
+entry 0x403c996c
+I (42) boot: ESP-IDF v5.2.1-dirty 2nd stage bootloader
+I (42) boot: compile time Sep 18 2024 16:16:05
+I (42) boot: Multicore bootloader
+I (46) boot: chip revision: v0.2
+I (49) boot.esp32s3: Boot SPI Speed : 80MHz
+I (54) boot.esp32s3: SPI Mode       : DIO
+I (59) boot.esp32s3: SPI Flash Size : 16MB
+I (64) boot: Enabling RNG early entropy source...
+I (69) boot: Partition Table:
+I (73) boot: ## Label            Usage          Type ST Offset   Length
+I (80) boot:   0 nvs              WiFi data        01 02 00009000 00014000
+I (88) boot:   1 otadata          OTA data         01 00 0001d000 00002000
+I (95) boot:   2 phy_init         RF data          01 01 0001f000 00001000
+I (102) boot:  3 factory          factory app      00 00 00020000 00250000
+I (110) boot:  4 ota_0            OTA app          00 10 00270000 00250000
+I (118) boot:  5 ota_1            OTA app          00 11 004c0000 00250000
+I (125) boot:  6 storage          Unknown data     01 82 00710000 002f0000
+I (133) boot: End of partition table
+I (137) boot: Defaulting to factory image
+I (5142) boot: Detect a condition of the factory reset
+I (5142) boot: Data partitions to erase: nvs
+I (5142) boot_comm: ## Label            Usage Offset   Length   Cleaned
+I (5723) boot_comm:  0 nvs              data  00009000 00014000 [yes]
+I (5723) boot_comm:  1 otadata          data  0001d000 00002000 [no]
+I (5726) boot_comm:  2 phy_init         data  0001f000 00001000 [no]
+I (5733) boot_comm:  6 storage          data  00710000 002f0000 [no]
+I (5740) boot: Defaulting to factory image
+I (5745) esp_image: segment 0: paddr=00020020 vaddr=3c140020 size=49874h (301172) map
+I (5787) esp_image: segment 1: paddr=0006989c vaddr=3fc9db00 size=06034h ( 24628) load
+I (5791) esp_image: segment 2: paddr=0006f8d8 vaddr=40374000 size=00740h (  1856) load
+I (5793) esp_image: segment 3: paddr=00070020 vaddr=42000020 size=130338h (1246008) map
+I (5941) esp_image: segment 4: paddr=001a0360 vaddr=40374740 size=192bch (103100) load
+I (5957) esp_image: segment 5: paddr=001b9624 vaddr=50000000 size=00004h (     4) load
+I (5957) esp_image: segment 6: paddr=001b9630 vaddr=600fe000 size=00070h (   112) load
+I (5973) boot: Loaded app from partition at offset 0x20000
+I (5974) boot: Disabling RNG early entropy source...
+
+I (5986) cpu_start: Multicore app
+I (5986) octal_psram: vendor id    : 0x0d (AP)
+I (5986) octal_psram: dev id       : 0x02 (generation 3)
+I (5989) octal_psram: density      : 0x03 (64 Mbit)
+I (5995) octal_psram: good-die     : 0x01 (Pass)
+I (6000) octal_psram: Latency      : 0x01 (Fixed)
+I (6006) octal_psram: VCC          : 0x01 (3V)
+I (6011) octal_psram: SRF          : 0x01 (Fast Refresh)
+I (6017) octal_psram: BurstType    : 0x01 (Hybrid Wrap)
+I (6023) octal_psram: BurstLen     : 0x01 (32 Byte)
+I (6028) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)
+I (6035) octal_psram: DriveStrength: 0x00 (1/1)
+I (6040) esp_psram: Found 8MB PSRAM device
+I (6045) esp_psram: Speed: 40MHz
+I (6780) esp_psram: SPI SRAM memory test OK
+I (6789) cpu_start: Pro cpu start user code
+I (6789) cpu_start: cpu freq: 160000000 Hz
+I (6789) cpu_start: Application information:
+I (6792) cpu_start: Project name:     ip_internal_network
+I (6798) cpu_start: App version:      v1.27_adc_ota_success
+I (6804) cpu_start: Compile time:     Sep 18 2024 18:38:08
+I (6811) cpu_start: ELF file SHA256:  71771e1a5...
+I (6816) cpu_start: ESP-IDF:          v5.2.1-dirty
+I (6822) cpu_start: Min chip rev:     v0.0
+I (6826) cpu_start: Max chip rev:     v0.99 
+I (6831) cpu_start: Chip rev:         v0.2
+I (6836) heap_init: Initializing. RAM available for dynamic allocation:
+I (6843) heap_init: At 3FCAC430 len 0003D2E0 (244 KiB): RAM
+I (6850) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
+I (6856) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
+I (6862) heap_init: At 600FE070 len 00001F68 (7 KiB): RTCRAM
+I (6869) esp_psram: Adding pool of 8192K of PSRAM memory to heap allocator
+I (6877) spi_flash: detected chip: gd
+I (6880) spi_flash: flash io: dio
+I (6885) sleep: Configure to isolate all GPIO pins in sleep state
+I (6891) sleep: Enable automatic switching of GPIO sleep configuration
+I (6899) main_task: Started on CPU0
+I (6909) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations
+I (6909) main_task: Calling app_main()
+E (6959) 
+: nvs_open(storage,,,) err(ESP_OK)
+E (6959) shcho: before nvs_get_str_or_blob()
+E (6959) shcho: nvs_get_str_or_blob / mesh_ap_ssid
+E (6959) shcho: 11111111111111111
+E (6959) 
+: nvs_get_blob(... mesh_ap_ssid... ) Failed(ESP_ERR_NVS_NOT_FOUND) : set to default
+E (6979) 
+: nvs_set(storage) nvs_set_str(mesh_ap_ssid) : err(ESP_OK)
+E (6979) shcho: before nvs_get_str_or_blob()
+E (6989) shcho: nvs_get_str_or_blob / mesh_ap_passwd
+E (6989) shcho: 11111111111111111
+E (6999) 
+: nvs_get_blob(... mesh_ap_passwd... ) Failed(ESP_ERR_NVS_NOT_FOUND) : set to default
+E (7009) 
+: nvs_set(storage) passwd : err(ESP_OK)
+E (7009) shcho: before nvs_get_str_or_blob()
+E (7019) shcho: nvs_get_str_or_blob / ntpserver
+E (7019) shcho: 11111111111111111
+E (7019) NVS str: nvs_get_str(): ntpserver: Error
+E (7029) shcho: before nvs_get_str_or_blob()
+E (7039) shcho: nvs_get_str_or_blob / ntpserver
+E (7039) shcho: 33333333333333333333333
+E (7039) shcho: before nvs_get_str_or_blob()
+E (7049) shcho: nvs_get_str_or_blob / ntpserver
+E (7059) shcho: 5555555555555555555555
+I (7059) NVS mesh_ap_ssid  : mesh_ap_ssid  =iotech2-x
+I (7069) NVS mesh_ap_passwd(after nvs_read): mesh_ap_passwd=iotech3000
+***** mesh_ap_ssid 9 bytes *****
+<0x0000> 69 6F 74 65  63 68 32 2D  78                        iotech2-x
+
+***** mesh_ap_passwd(after nvs_read) 10 bytes *****
+<0x0000> 69 6F 74 65  63 68 33 30  30 30                     iotech3000
+
+***** ntpserver(after nvs_read) 14 bytes *****
+<0x0000> 6E 74 70 2E  69 6F 74 65  63 68 2E 6F  72 67        ntp.iotech.org
+
+I (7109)  : 
+
+
+I (7119) simple_ota_example: SHA-256 for bootloader:  9c469dd883329aff3b9d10213808a23e8364fd7e018c1f752b0ddecc09546515
+I (7259) simple_ota_example: SHA-256 for current firmware:  668f7bbb539046adad1928fd1c1041789a49b5885a8c84577556943089d983f7
+***** esp_read_mac(ESP_MAC_EFUSE_FACTORY) 20 bytes *****
+<0x0000> DC DA 0C 4B  D2 B8 00 00  00 00 00 00  00 00 00 00  ...K............
+<0x0010> 00 00 00 00                                         ....
+
+I (7279) pp: pp rom version: e7ae62f
+I (7279) net80211: net80211 rom version: e7ae62f
+I (7299) wifi:wifi driver task: 3fcbf014, prio:23, stack:6656, core=0
+E (7299) shcho: nvs_get_str_or_blob / sta.ssid
+E (7299) shcho: 11111111111111111
+E (7299) shcho: nvs_get_str_or_blob / sta.pswd
+E (7309) shcho: 11111111111111111
+E (7309) shcho: nvs_get_str_or_blob / sta.pmk
+E (7319) shcho: 11111111111111111
+E (7319) shcho: nvs_get_str_or_blob / sta.bssid
+E (7329) shcho: 11111111111111111
+E (7329) shcho: nvs_get_str_or_blob / sta.apsw
+E (7339) shcho: 11111111111111111
+E (7339) shcho: nvs_get_str_or_blob / sta.apinfo
+E (7349) shcho: 11111111111111111
+E (7349) shcho: nvs_get_str_or_blob / ap.ssid
+E (7349) shcho: 11111111111111111
+E (7359) shcho: nvs_get_str_or_blob / ap.passwd
+E (7359) shcho: 11111111111111111
+E (7369) shcho: nvs_get_str_or_blob / ap.pmk
+E (7369) shcho: 11111111111111111
+E (7379) shcho: nvs_get_str_or_blob / country
+E (7379) shcho: 11111111111111111
+E (7389) shcho: nvs_get_str_or_blob / sta.owe_data
+E (7389) shcho: 11111111111111111
+E (7399) shcho: nvs_get_str_or_blob / sta.sae_h2e_id
+E (7399) shcho: 11111111111111111
+E (7409) shcho: nvs_get_str_or_blob / ap.pmk_info
+E (7409) shcho: 11111111111111111
+I (7419) wifi:wifi firmware version: a9f5b59
+I (7419) wifi:wifi certification version: v7.0
+I (7419) wifi:config NVS flash: enabled
+I (7429) wifi:config nano formating: disabled
+I (7429) wifi:Init data frame dynamic rx buffer num: 32
+I (7439) wifi:Init static rx mgmt buffer num: 5
+I (7439) wifi:Init management short buffer num: 32
+I (7439) wifi:Init static tx buffer num: 16
+I (7449) wifi:Init tx cache buffer num: 32
+I (7449) wifi:Init static tx FG buffer num: 2
+I (7459) wifi:Init static rx buffer size: 1600
+I (7459) wifi:Init static rx buffer num: 10
+I (7459) wifi:Init dynamic rx buffer num: 32
+I (7469) wifi_init: rx ba win: 6
+I (7469) wifi_init: tcpip mbox: 32
+I (7479) wifi_init: udp mbox: 6
+I (7479) wifi_init: tcp mbox: 6
+I (7479) wifi_init: tcp tx win: 5760
+I (7489) wifi_init: tcp rx win: 5760
+I (7489) wifi_init: tcp mss: 624
+I (7499) wifi_init: WiFi IRAM OP enabled
+I (7499) wifi_init: WiFi RX IRAM OP enabled
+***** set hostname(1:pre) 128 bytes *****
+<0x0000> 69 6F 74 65  63 68 2D 44  43 44 41 30  43 2D 2D 34  iotech-DCDA0C--4
+<0x0010> 42 44 32 42  38 00 00 00  00 00 00 00  00 00 00 00  BD2B8...........
+<0x0020> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0030> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0040> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0050> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0060> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0070> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+
+E (7569) shcho: esp_netif_set_hostname_api esp_netif:0x3fcbc600 hostname iotech-DCDA0C--4BD2B8
+444444444444444444h4444 p_netif->hostnsme=iotech-DCDA0C--4BD2B8
+E (7579) shcho: esp_netif_set_hostname_api esp_netif:0x0 hostname iotech-DCDA0C--4BD2B8
+***** set hostname(1:pre) 128 bytes *****
+<0x0000> 69 6F 74 65  63 68 2D 44  43 44 41 30  43 2D 2D 34  iotech-DCDA0C--4
+<0x0010> 42 44 32 42  38 00 00 00  00 00 00 00  00 00 00 00  BD2B8...........
+<0x0020> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0030> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0040> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0050> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0060> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0070> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+
+E (7649) shcho: esp_netif_set_hostname_api esp_netif:0x3fcbc600 hostname iotech-DCDA0C--4BD2B8
+444444444444444444h4444 p_netif->hostnsme=iotech-DCDA0C--4BD2B8
+E (7669) shcho: esp_netif_set_hostname_api esp_netif:0x0 hostname iotech-DCDA0C--4BD2B8
+I (7679) wifi:Set ps type: 0, coexist: 0
+
+I (7679) phy_init: phy_version 640,cd64a1a,Jan 24 2024,17:28:12
+W (7689) phy_init: failed to load RF calibration data (0x1102), falling back to full calibration
+I (7739) wifi:mode : softAP (dc:da:0c:4b:d2:b9)
+I (7739) wifi:Total power save buffer number: 8
+I (7739) wifi:Init max length of beacon: 752/752
+I (7739) wifi:Init max length of beacon: 752/752
+I (7749) esp_wifi_start: 
+ESP_OK
+
+I (7749) wifi:mode : sta (dc:da:0c:4b:d2:b8) + softAP (dc:da:0c:4b:d2:b9)
+I (7759) wifi:enable tsf
+E (7759) shcho get_hostname: esp_netif_get_hostname esp_netif:0x3fcbc600
+E (7769) shcho get_hostname: iotech-DCDA0C--4BD2B8
+E (7769) shcho get_hostname: iotech-DCDA0C--4BD2B8(p_netif->hostname)
+E (7789) shcho: nvs_get_str_or_blob / LAYER
+E (7789) shcho: 11111111111111111
+I (7789) mesh: <nvs>read layer:0, err:0x1102
+E (7789) shcho: nvs_get_str_or_blob / ASSOC
+E (7799) shcho: 11111111111111111
+I (7799) mesh: <nvs>read assoc:0, err:0x1102
+W (7809) event: handler already registered, overwriting
+I (7809) wifi:Set ps type: 0, coexist: 0
+
+E (7819) shcho: before nvs_get_str_or_blob()
+E (7819) shcho: nvs_get_str_or_blob / count_no_parent
+E (7829) shcho: 11111111111111111
+***** count_no_parent 10 bytes *****
+<0x0000> 00 00 00 00  00 00 00 00  00 00                     ..........
+
+I (8409) wifi:Total power save buffer number: 8
+***** esp_read_mac(ESP_MAC_EFUSE_FACTORY) 20 bytes *****
+<0x0000> DC DA 0C 4B  D2 B8 00 00  00 00 00 00  00 00 00 00  ...K............
+<0x0010> 00 00 00 00                                         ....
+
+I (8969) wifi:mode : sta (dc:da:0c:4b:d2:b8)
+I (8979) mesh: <MESH_NWK_LOOK_FOR_NETWORK>need_scan:0x3, need_scan_router:0x0, look_for_nwk_count:1
+I (8979) mesh_main: <MESH_EVENT_MESH_STARTED>ID:88:7f:7d:7e:77:76
+I (8989) mesh_main: mesh starts successfully, heap:8467348, root not fixed
+I (8999) wifi:Set ps type: 0, coexist: 0
+
+***** set hostname 128 bytes *****
+<0x0000> 69 6F 74 65  63 68 5F 44  43 44 41 30  43 5F 5F 34  iotech_DCDA0C__4
+<0x0010> 42 44 32 42  38 00 00 00  00 00 00 00  00 00 00 00  BD2B8...........
+<0x0020> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0030> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0040> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0050> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0060> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+<0x0070> 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+
+

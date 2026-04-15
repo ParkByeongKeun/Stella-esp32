@@ -1,0 +1,44 @@
+./main/ade9153a_spi.c:114:extern  esp_err_t iotech_get_nvs_str(uint8_t *key, uint8_t *value);
+./main/ade9153a_spi.c:134:      ret=iotech_get_nvs_str((uint8_t*)"cal_irms_cc", (uint8_t*)str_cal_irms_cc);
+./main/ade9153a_spi.c:139:      ret=iotech_get_nvs_str((uint8_t*)"cal_vrms_cc", (uint8_t*)str_cal_vrms_cc);
+./main/ade9153a_spi.c:144:      ret=iotech_get_nvs_str((uint8_t*)"cal_energy_cc", (uint8_t*)str_cal_energy_cc);
+./main/ade9153a_spi.c:149:      ret=iotech_get_nvs_str((uint8_t*)"cal_power_cc", (uint8_t*)str_cal_power_cc);
+./main/mesh_main.c:182:esp_err_t iotech_get_nvs_str(uint8_t *key, uint8_t *passwd);
+./main/mesh_main.c:199:esp_err_t iotech_get_nvs_str(uint8_t *key, uint8_t *value);
+./main/mesh_main.c:670:			err = iotech_get_nvs_str((uint8_t*)"ntpserver", (uint8_t *)buf_ntp_broker);
+./main/mesh_main.c:688:				iotech_get_nvs_str( (uint8_t*)"ntpserver", (uint8_t *)buf_ntp_broker);
+./main/mesh_main.c:701:			err = iotech_get_nvs_str((uint8_t*)"mqtt_broker_uri", (uint8_t *)buf_ntp_broker);
+./main/mesh_main.c:720:				iotech_get_nvs_str( (uint8_t*)"mqtt_broker_uri", (uint8_t *)buf_ntp_broker);
+./main/mesh_main.c:982:			iotech_get_nvs_str((uint8_t*)"install_addr", (uint8_t*)install_addr);
+./main/mesh_main.c:1019:			iotech_get_nvs_str((uint8_t *)"mqtt_broker_uri", (uint8_t*)mqtt_broker_uri);
+./main/mesh_main.c:1152:			iotech_get_nvs_str((uint8_t*)"count_no_parent", (uint8_t*)buf); 
+./main/mesh_main.c:1906:	iotech_get_nvs_str((uint8_t*)"mqtt_broker_uri", mqtt_broker_uri);
+./main/mesh_main.c:1907:	iotech_get_nvs_str((uint8_t*)"ota_url", ota_url);
+./main/mesh_main.c:1908:	iotech_get_nvs_str((uint8_t*)"install_addr", install_addr);
+./main/mesh_main.c:2081:static esp_err_t do_get_nvs_str(int argc, char **argv)
+./main/mesh_main.c:2084:	iotech_get_nvs_str((uint8_t *)argv[1], (uint8_t *)str);
+./main/mesh_main.c:2092:        .command = "get_nvs_str",
+./main/mesh_main.c:2093:        .help = "get_nvs_str key ",
+./main/mesh_main.c:2095:        .func = do_get_nvs_str,
+./main/mesh_main.c:2106:	iotech_get_nvs_str((uint8_t *)argv[1], (uint8_t *)str);
+./main/mesh_main.c:2783:esp_err_t iotech_get_nvs_str(uint8_t *key, uint8_t *value)
+./main/mesh_main.c:2866:			iotech_get_nvs_str((uint8_t *)"ntpserver", ntpserver);
+./main/mesh_main.c:2874:		iotech_get_nvs_str((uint8_t *)"ntpserver", ntpserver);
+./main/mesh_main.c:3126:	// iotech_get_nvs_str((uint8_t *)"mesh_ap_ssid", mesh_ap_ssid);
+./main/mesh_main.c:3127:	// iotech_get_nvs_str((uint8_t *)"mesh_ap_passswd", mesh_ap_passwd);
+./main/mesh_main.c:3131:    // iotech_get_nvs_str((uint8_t *)"ntpserver", myntp_str);
+./main/mesh_main.c:3271:	err_wifi = iotech_get_nvs_str((uint8_t*)"count_no_parent", (uint8_t*)buf); 
+./main/mesh_main.c:3416:       if((err  =  iotech_get_nvs_str((uint8_t *)"meter", (uint8_t*)num)) == ESP_OK)
+./main/mesh_main.c:3418:           iotech_get_nvs_str((uint8_t*)"aicc",   (uint8_t*)aiccValue);
+./main/mesh_main.c:3419:           iotech_get_nvs_str((uint8_t*)"avcc",   (uint8_t*)avccValue);
+./main/mesh_main.c:3420:           iotech_get_nvs_str((uint8_t*)"relay_con",   (uint8_t*)str_relay);
+./main/mesh_main.c:3443:       if((err =  iotech_get_nvs_str((uint8_t *)"rated_current",(uint8_t *)str_rated_current))== ESP_OK)
+./main/mesh_main.c:3445:               iotech_get_nvs_str((uint8_t*)"rated_voltage", (uint8_t*)str_rated_voltage); 
+./main/mesh_main.c:3447:			   iotech_get_nvs_str((uint8_t*)"swell_voltage", (uint8_t*)str_swell_voltage);
+./main/mesh_main.c:3452:               iotech_get_nvs_str((uint8_t*)"dip_voltage",  (uint8_t*)str_dip_voltage);
+./main/mesh_main.c:3456:     		   iotech_get_nvs_str((uint8_t*)"rated_freq",   (uint8_t*)str_rated_freq);
+./main/mesh_main.c:3462:			   iotech_get_nvs_str((uint8_t*)"over_current",  (uint8_t*)str_over_current);
+./main/mesh_main.c:3463:               iotech_get_nvs_str((uint8_t*)"warning_duration",  (uint8_t*)str_warning_duration);
+./main/mqtt_app.c:81:extern esp_err_t iotech_get_nvs_str(uint8_t *key, uint8_t *value);
+./main/mqtt_app.c:840:            iotech_get_nvs_str((uint8_t*)"noti_period", (uint8_t*)str_noti_period);
+./main/mqtt_app.c:1052:	if( (err = iotech_get_nvs_str((uint8_t *)"mqtt_broker_uri", (uint8_t*)mqtt_broker_uri) ) == ESP_OK )

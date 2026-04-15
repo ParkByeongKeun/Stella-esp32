@@ -1,0 +1,5 @@
+build/*
+cscope.*
+tags
+*.swp
+build/stella_firmware.bin

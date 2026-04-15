@@ -1,0 +1,8 @@
+ijoon_iotech/ip_mesh/key_pressed_30aea4_9e5404_ctrl
+ijoon_iotech/ip_mesh/key_pressed_8caab5_b5a8e4_ctrl
+
+ota_run=0
+ota_run=1
+
+ota_url=https://iotech.iptime.org:38070/ota_image_shcho/ip_internal_network.bin
+

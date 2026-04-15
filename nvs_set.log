@@ -1,0 +1,68 @@
+./main/ade9153a_spi.c:115:extern  esp_err_t iotech_set_nvs_str(uint8_t *key, uint8_t *value);
+./main/ade9153a_spi.c:161:    ret =  iotech_set_nvs_str((uint8_t*)"cal_irms_cc",   (uint8_t*)str_cal_irms_cc);
+./main/ade9153a_spi.c:169:    ret =  iotech_set_nvs_str((uint8_t*)"cal_vrms_cc",  (uint8_t*)str_cal_vrms_cc);
+./main/ade9153a_spi.c:177:    ret = iotech_set_nvs_str((uint8_t*)"cal_energy_cc", (uint8_t*)str_cal_energy_cc);
+./main/ade9153a_spi.c:185:     ret = iotech_set_nvs_str((uint8_t*)"cal_power_cc", (uint8_t*)str_cal_power_cc);
+./main/ade9153a_spi.c:193:   ret = iotech_set_nvs_str((uint8_t*)"rated_voltage", (uint8_t*)str_rated_voltage); 
+./main/ade9153a_spi.c:202:     ret = iotech_set_nvs_str((uint8_t*)"rated_current", (uint8_t*)str_rated_current);
+./main/ade9153a_spi.c:212:     ret = iotech_set_nvs_str((uint8_t*)"rated_freq",  (uint8_t*)str_rated_freq);
+./main/ade9153a_spi.c:222:     ret = iotech_set_nvs_str((uint8_t*)"swell_voltage", (uint8_t*)str_swell_voltage);
+./main/ade9153a_spi.c:231:     ret =  iotech_set_nvs_str((uint8_t*)"dip_voltage",  (uint8_t*)str_dip_voltage);
+./main/ade9153a_spi.c:240:     ret =  iotech_set_nvs_str((uint8_t*)"over_current",  (uint8_t*)str_over_current); 
+./main/ade9153a_spi.c:248:     ret = iotech_set_nvs_str((uint8_t*)"warning_duration",  (uint8_t*)str_warning_duration);
+./main/ade9153a_spi.c:265:	     ret =  iotech_set_nvs_str((uint8_t*)"relay_con",  (uint8_t*)str_relay);
+./main/mesh_main.c:181:esp_err_t iotech_set_nvs_str(uint8_t *key, uint8_t *value);
+./main/mesh_main.c:200:esp_err_t  iotech_set_nvs_str(uint8_t *key, uint8_t *value);
+./main/mesh_main.c:681:				err = iotech_set_nvs_str( (uint8_t*)"ntpserver", (uint8_t *)MESH_wifi_info.ntpserver);
+./main/mesh_main.c:712:				err = iotech_set_nvs_str( (uint8_t*)"mqtt_broker_uri", (uint8_t *)MESH_wifi_info.mqtt_broker_uri);
+./main/mesh_main.c:1095:		iotech_set_nvs_str((uint8_t*)"count_no_parent", (uint8_t*)buf);
+./main/mesh_main.c:1142:			iotech_set_nvs_str((uint8_t*)"count_no_parent", (uint8_t*)buf);
+./main/mesh_main.c:1172:		iotech_set_nvs_str((uint8_t*)"count_no_parent", (uint8_t*)buf);
+./main/mesh_main.c:2100:static esp_err_t do_set_nvs_str(int argc, char **argv)
+./main/mesh_main.c:2104:	iotech_set_nvs_str((uint8_t *)argv[1], (uint8_t *)argv[2]);
+./main/mesh_main.c:2114:        .command = "set_nvs_str",
+./main/mesh_main.c:2115:        .help = "set_nvs_str key value",
+./main/mesh_main.c:2117:        .func = do_set_nvs_str,
+./main/mesh_main.c:2813:esp_err_t  iotech_set_nvs_str(uint8_t *key, uint8_t *value)
+./main/mesh_main.c:2865:			iotech_set_nvs_str((uint8_t *)"ntpserver",(uint8_t *)"ntp.iotech.org");
+./main/mesh_main.c:2873:		iotech_set_nvs_str((uint8_t *)"ntpserver",(uint8_t *)"ntp.iotech.org");
+./main/mesh_main.c:3275:		iotech_set_nvs_str((uint8_t*)"count_no_parent", (uint8_t*)"0");
+./main/mesh_main.c:3425:           iotech_set_nvs_str((uint8_t*)"meter",  (uint8_t*)num);           
+./main/mesh_main.c:3426:           iotech_set_nvs_str((uint8_t*)"aicc",   (uint8_t*)aiccValue);
+./main/mesh_main.c:3427:           iotech_set_nvs_str((uint8_t*)"avcc",   (uint8_t*)avccValue);
+./main/mqtt_app.c:82:extern esp_err_t iotech_set_nvs_str(uint8_t *key, uint8_t *value);
+./main/mqtt_app.c:158:            iotech_set_nvs_str((uint8_t*)"avcc", (uint8_t *)avccValue);
+./main/mqtt_app.c:171:            iotech_set_nvs_str((uint8_t*)"aicc", (uint8_t *)aiccValue);
+./main/mqtt_app.c:183:            iotech_set_nvs_str((uint8_t*)"cal_irms_cc", (uint8_t *)str_cal_irms_cc);
+./main/mqtt_app.c:196:             iotech_set_nvs_str((uint8_t*)"cal_vrms_cc", (uint8_t*)str_cal_vrms_cc);
+./main/mqtt_app.c:211:            iotech_set_nvs_str((uint8_t*)"cal_power_cc", (uint8_t*)str_cal_power_cc);
+./main/mqtt_app.c:225:            iotech_set_nvs_str((uint8_t*)"cal_energy_cc", (uint8_t*)str_cal_energy_cc);
+./main/mqtt_app.c:241:           iotech_set_nvs_str((uint8_t*)"noti_period", (uint8_t*)str_noti_period);
+./main/mqtt_app.c:254:             iotech_set_nvs_str((uint8_t*)"mesh_ap_ssid",  (uint8_t*)mesh_ap_ssid);
+./main/mqtt_app.c:268:             iotech_set_nvs_str((uint8_t*)"mesh_ap_passwd", (uint8_t*)mesh_ap_passwd);
+./main/mqtt_app.c:281:            iotech_set_nvs_str((uint8_t*)"mqtt_broker_uri", (uint8_t*)mqtt_broker_uri);
+./main/mqtt_app.c:293:               iotech_set_nvs_str((uint8_t*)"freq_margin",  (uint8_t*)str_freq_margin);
+./main/mqtt_app.c:320:                    iotech_set_nvs_str((uint8_t*)"over_voltage_margin", (uint8_t*)str_over_voltage_margin);
+./main/mqtt_app.c:333:                   iotech_set_nvs_str((uint8_t*)"swell_voltage",  (uint8_t*)str_swell_voltage);          
+./main/mqtt_app.c:351:                    iotech_set_nvs_str((uint8_t*)"dip_voltage", (uint8_t*)str_dip_voltage);
+./main/mqtt_app.c:365:                    iotech_set_nvs_str((uint8_t*)"over_current", (uint8_t*)str_over_current);
+./main/mqtt_app.c:386:                 iotech_set_nvs_str((uint8_t*)"rated_voltage",  (uint8_t*)str_rated_voltage);
+./main/mqtt_app.c:401:                    iotech_set_nvs_str((uint8_t*)"rated_current",  (uint8_t*)str_rated_current);
+./main/mqtt_app.c:415:                    iotech_set_nvs_str((uint8_t*)"rated_freq",    (uint8_t*)str_rated_freq);
+./main/mqtt_app.c:430:                     iotech_set_nvs_str((uint8_t*)"warning_duration", (uint8_t*)str_warning_duration);
+./main/mqtt_app.c:786:			iotech_set_nvs_str((uint8_t*)"count_no_parent", (uint8_t*)buf);
+./main/mqtt_app.c:953:					            	iotech_set_nvs_str((uint8_t*)"mesh_ap_ssid", (uint8_t*)p);
+./main/mqtt_app.c:960:						                iotech_set_nvs_str((uint8_t*)"mesh_ap_passwd", (uint8_t*)p);
+./main/mqtt_app.c:967:					            	iotech_set_nvs_str((uint8_t*)"ntpserver", (uint8_t*)p);
+./main/mqtt_app.c:974:						            iotech_set_nvs_str((uint8_t*)"mqtt_broker_uri", (uint8_t*)p);
+./main/mqtt_app.c:981:						            iotech_set_nvs_str((uint8_t*)"ota_url", (uint8_t*)p);
+./main/mqtt_app.c:1060:			iotech_set_nvs_str((uint8_t*)"mqtt_broker_uri", (uint8_t *)mqtt_broker_uri);
+./main/mqtt_app.c:1069:		iotech_set_nvs_str((uint8_t*)"mqtt_broker_uri", (uint8_t*)mqtt_broker_uri );
+./main/tcp_server.c:60:extern  esp_err_t iotech_set_nvs_str(uint8_t *key, uint8_t *value);
+./main/tcp_server.c:197:					ESP_LOGW("NVS", "mqtt_broker_uri :set_nvs_str ");
+./main/tcp_server.c:208:					ESP_LOGW("NVS", "ntpserver :set_nvs_str ");
+./main/tcp_server.c:209:					iotech_set_nvs_str((uint8_t*)"ntpserver",   (uint8_t *)&iotech_setup.ntpserver[strlen("ntpserver:")]);
+./main/tcp_server.c:224:					ESP_LOGE("NVS", "ssid & passwd does not match : set_nvs_str : will restart");
+./main/tcp_server.c:225:					ESP_LOGE("NVS", "ssid & passwd does not match : set_nvs_str : will restart");
+./main/tcp_server.c:226:					ESP_LOGE("NVS", "ssid & passwd does not match : set_nvs_str : will restart");
+./main/tcp_server.c:227:					ESP_LOGE("NVS", "ssid & passwd does not match : set_nvs_str : will restart");

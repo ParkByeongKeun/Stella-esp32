@@ -1,0 +1,1 @@
+v1.27_adc_ota_success
