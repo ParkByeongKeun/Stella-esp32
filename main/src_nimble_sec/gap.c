@@ -270,26 +270,22 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
                  event->subscribe.cur_notify, event->subscribe.prev_indicate,
                  event->subscribe.cur_indicate);
 
+        if (event->subscribe.attr_handle == heart_rate_chr_val_handle) {
+            printf("\nSubscribed with notification_handle =%d\n",
+                   event->subscribe.attr_handle);
+            notify_state = event->subscribe.cur_notify;
+            printf("notify_state=%d\n", notify_state);
+        }
+
         /* GATT subscribe event callback */
-			//shcho : for Non security
-        	gatt_svr_subscribe_cb(event);
+        // shcho : for Non security
+        gatt_svr_subscribe_cb(event);
 //          shcho : for BLE Security
 //          rc = gatt_svr_subscribe_cb(event);
 //          if (rc == BLE_ATT_ERR_INSUFFICIENT_AUTHEN) {
 //              /* Request connection encryption */
 //              return ble_gap_security_initiate(event->subscribe.conn_handle);
 //          }
-
-		//shcho add
-//  //  		if (event->subscribe.attr_handle == notification_handle)
-		if (event->subscribe.attr_handle == heart_rate_chr_val_handle)
-//  		if(    (event->subscribe.attr_handle == heart_rate_chr_val_handle)      //shcho
-//  		    || (event->subscribe.attr_handle == stella_strange_chr_val_handle)) //shcho
-		{
-		  printf("\nSubscribed with notification_handle =%d\n", event->subscribe.attr_handle);
-		  notify_state = event->subscribe.cur_notify; //!! As the client is now subscribed to notifications, the value is set to 1
-		  printf("notify_state=%d\n", notify_state);
-		}
 
         return rc;
 
