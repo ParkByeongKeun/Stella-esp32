@@ -29,6 +29,66 @@
 #include <sys/time.h>
 #include "esp_wifi.h"
 
+/* RS9A/ZE08: VFS select()는 lwIP 쪽 내부 RAM 할당을 쓰며 heap 부족 시 errno=12.
+ * 동일 UART_NUM_1 드라이버에 대해 uart_read_bytes()로 대기하면 heap 부담 없음. */
+static int uart1_read_line_rs9a(char *buf, size_t cap, TickType_t timeout_ticks)
+{
+    if (!buf || cap < 2) {
+        return 0;
+    }
+    size_t pos = 0;
+    buf[0] = '\0';
+    TickType_t start = xTaskGetTickCount();
+    while (pos < cap - 1) {
+        if ((xTaskGetTickCount() - start) >= timeout_ticks) {
+            break;
+        }
+        TickType_t left = timeout_ticks - (xTaskGetTickCount() - start);
+        if (left < pdMS_TO_TICKS(10)) {
+            left = pdMS_TO_TICKS(10);
+        }
+        uint8_t ch;
+        int n = uart_read_bytes(UART_NUM_1, &ch, 1, left);
+        if (n < 0) {
+            return -1;
+        }
+        if (n == 0) {
+            continue;
+        }
+        buf[pos++] = (char)ch;
+        buf[pos] = '\0';
+        if (ch == '\n') {
+            break;
+        }
+    }
+    return (int)pos;
+}
+
+/** ZE08 응답 고정 길이(9) — select 없이 수신 */
+static int uart1_read_exact_ze08(uint8_t *buf, size_t want, TickType_t timeout_ticks)
+{
+    size_t got = 0;
+    TickType_t start = xTaskGetTickCount();
+    while (got < want) {
+        if ((xTaskGetTickCount() - start) >= timeout_ticks) {
+            break;
+        }
+        TickType_t left = timeout_ticks - (xTaskGetTickCount() - start);
+        if (left > pdMS_TO_TICKS(500)) {
+            left = pdMS_TO_TICKS(500);
+        }
+        int n = uart_read_bytes(UART_NUM_1, buf + got, want - got, left);
+        if (n < 0) {
+            return -1;
+        }
+        if (n == 0) {
+            continue;
+        }
+        got += (size_t)n;
+    }
+    return (got == want) ? (int)want : (int)got;
+}
+
 extern esp_err_t ijoon_get_nvs_str(uint8_t *key, uint8_t *value);
 extern esp_err_t ijoon_set_nvs_str(uint8_t *key, uint8_t *value);
 extern esp_err_t nvs_set_mesh_ap_ssid_passwd(uint8_t *ssid, uint8_t *passwd);
@@ -559,76 +619,33 @@ static void uart_select_task_uart1(void *arg)
 			uart_vfs_dev_port_set_tx_line_endings(1, ESP_LINE_ENDINGS_LF); //v5.3.2
 			uart_vfs_dev_port_set_rx_line_endings(1, ESP_LINE_ENDINGS_LF); //v5.3.2
 	
-	        while (1) 
-			{
+	        {
 				stella_wait_while_ota_sensors_paused();
-	            int s;
-	            fd_set rfds;
-	            struct timeval tv = {
-	                .tv_sec = 5,
-	                .tv_usec = 0,
-	            };
-	
-	            FD_ZERO(&rfds);
-	            FD_SET(fd_uart1, &rfds);
-	
-	            s = select(fd_uart1 + 1, &rfds, NULL, NULL, &tv);
-	
-	            if (s < 0) {
-	                ESP_LOGE(TAG, "Select failed: errno %d", errno);
-	                break;
-	            } else if (s == 0) {
-	                ESP_LOGI(TAG, "Timeout has been reached and nothing has been received");
+				switch (loop_count_rs9a % 3) {
+				case 0:
+					buf_str = buf_str0;
 					break;
-	            } else {
-	                if (FD_ISSET(fd_uart1, &rfds)) 
-					{
-						switch( loop_count_rs9a % 3 )
-						{
-							case 0 : // VERSION?
-								buf_str = buf_str0 ;
-								break;
-							case 1 : // SERIALNO?
-								buf_str = buf_str1 ;
-								break;
-							case 2 : // VALUE?
-								buf_str = buf_str2 ;
-								break;
-						} 
-						int len_read = 0;
-						memset(buf_str, 0, LEN_BUF_STR_RS9A);
-	                    len_read = read(fd_uart1, buf_str, LEN_BUF_STR_RS9A-1 ) ;
-						ESP_LOGW("shcho", "len_read=%d :  from RS9A", len_read);
-	                    if (len_read > 0)
-						{
-	                        ESP_LOGI(TAG, "Received: %s", buf_str);
-	                        // Note: Only one character was read even the buffer contains more. The other characters will
-	                        // be read one-by-one by subsequent calls to select() which will then return immediately
-	                        // without timeout.
-							hexdump3("RS9A reply", buf_str, len_read);	
-							if( loop_count_rs9a % 3  == 2)
-							{
-								//이 부분은 앞에서 Static Main 일때만 실행된다.
-								// Data가 Invalid( Not NORMAL) 일 때는 전송하지 않는다.
-								extract_info_RS9A_send(buf_str0, buf_str1, buf_str2);
-//  								if (flag_RS9A_data_valid == 1 )
-//  								{
-//  	        						if( flag_IS_WEARABLE == 0 )  // Static Main
-//  									{
-//  										send_to_CM4_RS9A();
-//  									};
-//  								}
-							} 
-							break;
-	                    } else {
-	                        ESP_LOGE(TAG, "UART read error");
-	                        break;
-	                    }
-	                } else {
-	                    ESP_LOGE(TAG, "No FD has been set in select()");
-	                    break;
-	                }
-	            }
+				case 1:
+					buf_str = buf_str1;
+					break;
+				case 2:
+					buf_str = buf_str2;
+					break;
+				}
+				memset(buf_str, 0, LEN_BUF_STR_RS9A);
+				int len_read = uart1_read_line_rs9a(buf_str, LEN_BUF_STR_RS9A, pdMS_TO_TICKS(5000));
+				if (len_read < 0) {
+					ESP_LOGE(TAG, "RS9A uart_read_bytes error");
+				} else if (len_read == 0) {
+					ESP_LOGI(TAG, "RS9A: timeout, no line");
+				} else {
+					ESP_LOGW("shcho", "len_read=%d :  from RS9A", len_read);
+					ESP_LOGI(TAG, "Received: %s", buf_str);
+					hexdump3("RS9A reply", buf_str, len_read);
+					if (loop_count_rs9a % 3 == 2) {
+						extract_info_RS9A_send(buf_str0, buf_str1, buf_str2);
+					}
+				}
 	        }
 			loop_count_rs9a ++ ; 
 	
@@ -687,77 +704,30 @@ static void uart_select_task_uart1(void *arg)
 			vTaskDelay(pdMS_TO_TICKS(ZE08_CMD_SETTLE_MS));
 
 			stella_wait_while_ota_sensors_paused();
-	        int s;
-	        fd_set rfds;
-	        struct timeval tv = {
-		        .tv_sec = 5,
-		        .tv_usec = 0,
-	        };
-	
-	        FD_ZERO(&rfds);
-	        FD_SET(fd_uart1, &rfds);
-	        s = select(fd_uart1 + 1, &rfds, NULL, NULL, &tv);
-	
-	        if (s < 0) 
 			{
-	            ESP_LOGE("shcho_ZE08", "Select failed: errno %d", errno);
-//  	            break;
-	        } 
-			else if (s == 0) 
-			{
-	            ESP_LOGI("shcho_ZE08", "Timeout has been reached and nothing has been received");
-//  				break;
-	        } 
-			else 
-			{
-	        	if (FD_ISSET(fd_uart1, &rfds)) 
-				{
-					int residue = 9 ; 
-					char tmp_buf[9];
-					struct _ZE08_CH2O_data ZE08_CH2O_data;
+				char tmp_buf[9];
+				struct _ZE08_CH2O_data ZE08_CH2O_data;
 
-					memset((char *)&ZE08_CH2O_data, 0, sizeof(ZE08_CH2O_data));
-					memset((char *)tmp_buf, 0, sizeof(tmp_buf));
-					int sum_read = 0 ;
-					while(residue > 0 ) 
-					{
-						int len_read = 0;
-		
-//  			            len_read = read(fd_uart1, &tmp_buf[9 - residue], residue) ;
-			            len_read = read(fd_uart1, &tmp_buf[sum_read], residue) ;
+				memset((char *)&ZE08_CH2O_data, 0, sizeof(ZE08_CH2O_data));
+				memset((char *)tmp_buf, 0, sizeof(tmp_buf));
 
-						if( len_read > 0 )
-						{
-							residue  -= len_read;
-							sum_read += len_read;
-
-
-							ESP_LOGW("shcho", "len_read=%d :  from ZE08", len_read);
-	
-//  				            if (len_read > 0 && residue == 0 )
-				            if ( residue == 0 )
-							{
-								memcpy((char *)&ZE08_CH2O_data, tmp_buf, sizeof(ZE08_CH2O_data));
-								hexdump3("ZE08 reply", &ZE08_CH2O_data, len_read);	
-								ESP_LOGW("ZE08 data", "ug/m^3 = %d, ppb = %d", htons(ZE08_CH2O_data.ug_per_m3), 
-		                                                                       htons(ZE08_CH2O_data.ppb));
-								uint8_t cks = calc_ZE08_cks((char *)&ZE08_CH2O_data);
-								ESP_LOGW("ZE08 cks", "cks_calc= %02x, cks = %02x", cks, ZE08_CH2O_data.cks ); 
-								if(    ( ZE08_CH2O_data.start == 0xff  )
-								   &&  ( ZE08_CH2O_data.cmd   == 0x86  ) 
-								   &&  ( cks == ZE08_CH2O_data.cks ) ) 
-	
-								{
-									send_ZE08_data(&ZE08_CH2O_data);
-								}
-
-							}
-			            } 
-						else 
-						{
-				            ESP_LOGE("ZE08", "UART read error");
-							break;
-			            }
+				int sum_read = uart1_read_exact_ze08((uint8_t *)tmp_buf, sizeof(tmp_buf),
+								      pdMS_TO_TICKS(5000));
+				if (sum_read < 0) {
+					ESP_LOGE("shcho_ZE08", "uart_read_bytes error");
+				} else if (sum_read < 9) {
+					ESP_LOGW("shcho_ZE08", "ZE08 incomplete reply: %d/9 bytes", sum_read);
+				} else {
+					memcpy((char *)&ZE08_CH2O_data, tmp_buf, sizeof(ZE08_CH2O_data));
+					hexdump3("ZE08 reply", &ZE08_CH2O_data, 9);
+					ESP_LOGW("shcho", "len_read=%d :  from ZE08", sum_read);
+					ESP_LOGW("ZE08 data", "ug/m^3 = %d, ppb = %d", htons(ZE08_CH2O_data.ug_per_m3),
+						 htons(ZE08_CH2O_data.ppb));
+					uint8_t cks = calc_ZE08_cks((char *)&ZE08_CH2O_data);
+					ESP_LOGW("ZE08 cks", "cks_calc= %02x, cks = %02x", cks, ZE08_CH2O_data.cks);
+					if ((ZE08_CH2O_data.start == 0xff) && (ZE08_CH2O_data.cmd == 0x86) &&
+					    (cks == ZE08_CH2O_data.cks)) {
+						send_ZE08_data(&ZE08_CH2O_data);
 					}
 				}
 			}

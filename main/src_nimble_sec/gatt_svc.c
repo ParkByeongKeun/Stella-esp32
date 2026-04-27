@@ -9,6 +9,13 @@
 #include "gap.h"
 #include "heart_rate.h"
 #include "led.h"
+#include "agg_buffer.h"
+#include <stdlib.h>
+
+/* ESP-IDF NimBLE: 일부 툴체인에서 host/ble_gatts.h 가 include 경로에 없음 — 선언만 사용. */
+struct os_mbuf;
+int ble_gatts_notify_custom(uint16_t conn_handle, uint16_t chr_val_handle,
+                            struct os_mbuf *txom);
 
 /* Private function declarations */
 static int heart_rate_chr_access(uint16_t conn_handle, uint16_t attr_handle,
@@ -80,7 +87,9 @@ void vTasksendNotification_for_keepalive() //! For sending notifications periodi
   static int val_increase = 0;
   while (1)
   {
-    if (notify_state) //!! This value is checked so that we don't send notifications if no one has subscribed to our notification handle.
+    if (notify_state && !agg_buffer_is_flushing())
+    //!! notify 를 보낼 때: 구독자가 있고, 히스토리 flush 중이 아닐 때만.
+    //   history-first 정책상 히스토리 전송 중엔 KEEP_ALIVE 도 보류한다.
     {
 
 	  xSemaphoreTake(sema_ble_send_noti, portMAX_DELAY);
@@ -88,8 +97,8 @@ void vTasksendNotification_for_keepalive() //! For sending notifications periodi
       om = ble_hs_mbuf_from_flat(notification, strlen(notification));
       ESP_LOGW("shcho", "notification(1)=%s", notification);
 
-//        rc = ble_gattc_notify_custom(conn_handle, notification_handle, om);
-      rc = ble_gattc_notify_custom(conn_handle, heart_rate_chr_val_handle, om);
+//        rc = ble_gatts_notify_custom(conn_handle, notification_handle, om);
+      rc = ble_gatts_notify_custom(conn_handle, heart_rate_chr_val_handle, om);
       printf("\n rc=%d\n", rc);
 
       if (rc != 0)
@@ -106,8 +115,8 @@ void vTasksendNotification_for_keepalive() //! For sending notifications periodi
 //        om = ble_hs_mbuf_from_flat(notification, strlen(notification));
 //        ESP_LOGW("shcho", "notification(1)=%s", notification);
 //  
-//  //        rc = ble_gattc_notify_custom(conn_handle, notification_handle, om);
-//        rc = ble_gattc_notify_custom(conn_handle, heart_rate_chr_val_handle, om);
+//  //        rc = ble_gatts_notify_custom(conn_handle, notification_handle, om);
+//        rc = ble_gatts_notify_custom(conn_handle, heart_rate_chr_val_handle, om);
 //        printf("\n rc=%d\n", rc);
 //  
 //        if (rc != 0)
@@ -120,8 +129,8 @@ void vTasksendNotification_for_keepalive() //! For sending notifications periodi
 //        om = ble_hs_mbuf_from_flat(notification, strlen(notification));
 //        ESP_LOGW("shcho", "notification(2)=%s", notification);
 //  
-//  //        rc = ble_gattc_notify_custom(conn_handle, notification_handle, om);
-//        rc = ble_gattc_notify_custom(conn_handle, heart_rate_chr_val_handle, om);
+//  //        rc = ble_gatts_notify_custom(conn_handle, notification_handle, om);
+//        rc = ble_gatts_notify_custom(conn_handle, heart_rate_chr_val_handle, om);
 //        printf("\n rc=%d\n", rc);
 //  
 //        if (rc != 0)
@@ -139,11 +148,50 @@ void vTasksendNotification_for_keepalive() //! For sending notifications periodi
   }
   vTaskDelete(NULL);
 }
+/* 임의 문자열을 notify 로 전송. agg_buffer.c 가 히스토리 전송에 사용.
+ * 세마포어/딜레이는 기존 라이브 notify 와 동일하게 유지하여 백프레셔 적용. */
+int ble_send_raw(const char *s)
+{
+	int rc = -1;
+	if (!s || !*s) return -1;
+
+	if (notify_state)
+	{
+		xSemaphoreTake(sema_ble_send_noti, portMAX_DELAY);
+
+		memset(notification, 0, sizeof(notification));
+		strncpy(notification, s, sizeof(notification) - 1);
+
+		struct os_mbuf *om = ble_hs_mbuf_from_flat(notification, strlen(notification));
+		ESP_LOGI("agg_tx", "notify=%s", notification);
+
+		rc = ble_gatts_notify_custom(conn_handle, heart_rate_chr_val_handle, om);
+		if (rc != 0)
+		{
+			printf("\n ble_send_raw error rc=%d (%s)\n", rc, notification);
+		}
+
+		vTaskDelay(30 / portTICK_PERIOD_MS);
+		xSemaphoreGive(sema_ble_send_noti);
+	}
+	return rc;
+}
+
 int ble_send_noti_float(char *id, float value)
 {
   	int rc = -1;
   	struct os_mbuf *om;
-	  
+
+	/* 구독 여부와 무관하게 최신값을 버퍼링 모듈에 공급.
+	 * (Static 보드에서는 agg_buffer 내부에서 즉시 무시된다.) */
+	agg_latest_update(id, value);
+
+	/* 히스토리 flush 가 진행 중이면 라이브 전송을 보류한다.
+	 * 앱 쪽 요구사항: "저장된 기록을 먼저 다 보내고, 그 다음 실시간". */
+	if (agg_buffer_is_flushing()) {
+		return -1;
+	}
+
     if (notify_state) 
 	//!! This value is checked so that we don't send notifications 
 	//if no one has subscribed to our notification handle.
@@ -157,8 +205,8 @@ int ble_send_noti_float(char *id, float value)
 		om = ble_hs_mbuf_from_flat(notification, strlen(notification));
 		ESP_LOGW("shcho", "notification(1)=%s", notification);
 
-//        rc = ble_gattc_notify_custom(conn_handle, notification_handle, om);
-		rc = ble_gattc_notify_custom(conn_handle, heart_rate_chr_val_handle, om);
+//        rc = ble_gatts_notify_custom(conn_handle, notification_handle, om);
+		rc = ble_gatts_notify_custom(conn_handle, heart_rate_chr_val_handle, om);
 		printf("\n rc=%d\n", rc);
 		if (rc != 0)
 		{
@@ -175,7 +223,14 @@ int ble_send_noti_int(char *id, int value)
 {
   	int rc = -1;
   	struct os_mbuf *om;
-	  
+
+	agg_latest_update(id, (float)value);
+
+	/* 히스토리 flush 중에는 라이브 notify 보류. */
+	if (agg_buffer_is_flushing()) {
+		return -1;
+	}
+
     if (notify_state) 
 	//!! This value is checked so that we don't send notifications 
 	//if no one has subscribed to our notification handle.
@@ -188,8 +243,8 @@ int ble_send_noti_int(char *id, int value)
 		om = ble_hs_mbuf_from_flat(notification, strlen(notification));
 		ESP_LOGW("shcho", "notification(1)=%s", notification);
 
-//        rc = ble_gattc_notify_custom(conn_handle, notification_handle, om);
-		rc = ble_gattc_notify_custom(conn_handle, heart_rate_chr_val_handle, om);
+//        rc = ble_gatts_notify_custom(conn_handle, notification_handle, om);
+		rc = ble_gatts_notify_custom(conn_handle, heart_rate_chr_val_handle, om);
 		printf("\n rc=%d\n", rc);
 		if (rc != 0)
 		{
@@ -206,7 +261,21 @@ int ble_send_noti_str(char *id, char* val_str)
 {
   	int rc = -1;
   	struct os_mbuf *om;
-	  
+
+	/* 문자열도 숫자로 파싱 가능한 경우 최신값 업데이트. */
+	if (val_str && *val_str) {
+		char *endp = NULL;
+		float fv = strtof(val_str, &endp);
+		if (endp != val_str) {
+			agg_latest_update(id, fv);
+		}
+	}
+
+	/* 히스토리 flush 중에는 라이브 notify 보류. */
+	if (agg_buffer_is_flushing()) {
+		return -1;
+	}
+
     if (notify_state) 
 	//!! This value is checked so that we don't send notifications 
 	//if no one has subscribed to our notification handle.
@@ -219,8 +288,8 @@ int ble_send_noti_str(char *id, char* val_str)
 		om = ble_hs_mbuf_from_flat(notification, strlen(notification));
 		ESP_LOGW("shcho", "notification(1)=%s", notification);
 
-//        rc = ble_gattc_notify_custom(conn_handle, notification_handle, om);
-		rc = ble_gattc_notify_custom(conn_handle, heart_rate_chr_val_handle, om);
+//        rc = ble_gatts_notify_custom(conn_handle, notification_handle, om);
+		rc = ble_gatts_notify_custom(conn_handle, heart_rate_chr_val_handle, om);
 		printf("\n rc=%d\n", rc);
 		if (rc != 0)
 		{
@@ -427,6 +496,12 @@ void gatt_svr_subscribe_cb(struct ble_gap_event *event) {
         heart_rate_chr_conn_handle = event->subscribe.conn_handle;
         heart_rate_chr_conn_handle_inited = true;
         heart_rate_ind_status = event->subscribe.cur_indicate;
+
+        /* notify 가 방금 활성화됐다면(이전 0 → 현재 1) 히스토리 flush 를 즉시 트리거. */
+        if (!event->subscribe.prev_notify && event->subscribe.cur_notify) {
+            ESP_LOGI(TAG, "BLE notify subscribed -> kick agg_buffer flush");
+            agg_buffer_kick_flush();
+        }
     }
 }
 //  shcho: for BLE Security

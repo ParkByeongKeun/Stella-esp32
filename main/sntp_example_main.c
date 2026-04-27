@@ -81,17 +81,17 @@ void app_main_sntp(void *pvParameters)
     struct tm timeinfo;
     time(&now);
     localtime_r(&now, &timeinfo);
-    // Is time set? If not, tm_year will be (1970 - 1900).
-	    if (timeinfo.tm_year < (2016 - 1900)) 
-        {
-	        ESP_LOGE(TAG, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
-//  	        obtain_time_as_normal_function();
-//  	        // update 'now' variable with current time
-//  	        time(&now);
-        }
+    /* 시간이 이미 맞으면 SNTP를 돌리지 않음.
+     * 기존: 30초마다 무조건 obtain_time → init/sync_wait/deinit 반복.
+     * 그러면 Wi-Fi는 붙었는데 NTP 응답이 느리거나 막혀 있을 때
+     * "Waiting for system time... (1/15)" 로그가 주기적으로 반복됨.
+     * (Wi-Fi 연결 ≠ UDP/123 NTP 성공) */
+    if (timeinfo.tm_year < (2016 - 1900)) {
+        ESP_LOGW(TAG, "System time not set yet; running SNTP (Wi-Fi alone does not set RTC)");
         obtain_time_as_normal_function();
-        // update 'now' variable with current time
         time(&now);
+        localtime_r(&now, &timeinfo);
+    }
 //  #ifdef CONFIG_SNTP_TIME_SYNC_METHOD_SMOOTH
 //  	    else 
 //  		{

@@ -35,6 +35,11 @@
 #define  BUFFER_SIZE 600
 #define  blinkInterval  500
 
+static void *meter_malloc_spiram(size_t n)
+{
+    void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(n);
+}
 
 static const char *TAG = "meter";
 static const char *TAG_GPIO = "gpio";
@@ -1081,7 +1086,7 @@ void sendEvent(const char* str)
      strftime(datetime, sizeof(datetime), "%Y-%m-%d %H:%M:%S", local_time);
 
     if(strcmp(str, "온도")==0) {
-        Event  *event  =  (Event*)  malloc(sizeof(Event));
+        Event  *event  =  (Event *) meter_malloc_spiram(sizeof(Event));
         if (event  == NULL) {
            printf("Memory allocation failed\n");
            return; 
@@ -1318,14 +1323,18 @@ void process_1min_tasks(time_t current_time) {
                         ESP_LOGI(TAG, "db size=%zu", db_size);
                       
 
-                        Device  *device =  (Device*) malloc(sizeof(Device));
-                        if(device == NULL)
-                        {
-                                  printf("memory  allocation failed\n");
-                        }
-                        
-                 
-                        char * device_buffer  = (char *)malloc(600*sizeof(char));   
+                        Device *device = (Device *)meter_malloc_spiram(sizeof(Device));
+                        char *device_buffer = (char *)meter_malloc_spiram(600 * sizeof(char));
+                        if (device == NULL || device_buffer == NULL) {
+                            ESP_LOGE(TAG, "device publish: alloc failed (device=%p buffer=%p)",
+                                     (void *)device, (void *)device_buffer);
+                            if (device_buffer) {
+                                free(device_buffer);
+                            }
+                            if (device) {
+                                free(device);
+                            }
+                        } else {
                         strcpy(device->time_start,  energyArray[0].DateTime);
                         strcpy(device->time_end,    energyArray[noti_period-1].DateTime);
                         device->time_start_sec = convert_to_seconds(energyArray[0].DateTime); 
@@ -1349,6 +1358,8 @@ void process_1min_tasks(time_t current_time) {
                      //   mqtt_app_publish(topic, buffer);
                         if(tm_year>2023) mqtt_app_publish(topic, device_buffer);
                         free(device_buffer);
+                        free(device);
+                        }
                    }
  }
 

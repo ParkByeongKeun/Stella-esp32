@@ -88,6 +88,7 @@ extern uint32_t read_ade9153a_wav(void);
 #include "esp_console.h"
 #include "esp_vfs_dev.h"
 #include "driver/uart.h"
+#include "driver/uart_vfs.h"
 #include "linenoise/linenoise.h"
 #include "argtable3/argtable3.h"
 #include "esp_vfs_fat.h"
@@ -101,6 +102,10 @@ extern uint32_t read_ade9153a_wav(void);
 #include <cJSON.h>
 //-----------------------------------------------------
 #include  "spifss.h"
+#include "agg_buffer.h"
+
+/* NimBLE GAP subscribe — agg snapshot 은 1이면 누적/디스크 쓰기 중지 */
+extern bool notify_state;
 
 
 
@@ -1420,10 +1425,63 @@ void __attribute__((unused)) mesh_event_handler(void *arg, esp_event_base_t even
 /** WiFi 재연결 — BLE 공존을 위해 지수 백오프 적용 */
 #define WIFI_BACKOFF_INIT_MS    2000
 #define WIFI_BACKOFF_MAX_MS     30000
-#define WIFI_REPROV_FAIL_COUNT  10
+/* 재프로비저닝 트리거 — "처음 끊긴 뒤로 N ms 동안 한 번도 IP를 못 받으면" 진입.
+ *  - 부팅 후 한 번도 IP 를 못 받은 상태(=새 자격이 잘못됨/AP 없음): 1분
+ *  - 정상 운용 중 끊긴 경우: 5분 */
+#define WIFI_REPROV_TIMEOUT_FIRST_MS    (1 * 60 * 1000)        /* 1분 */
+#define WIFI_REPROV_TIMEOUT_RUNNING_MS  (5 * 60 * 1000)        /* 5분 */
+/* WiFi 는 붙었는데 인터넷/MQTT 가 안 되는 상태 (공유기 WAN 차단 등) 임계.
+ * 정상 운용 중 임계와 동일하게 5분. */
+#define MQTT_REPROV_TIMEOUT_MS          (5 * 60 * 1000)        /* 5분 */
+/* 보조 안전 타이머 주기 — disconnect 이벤트 수에 의존하지 않고 절대 시간으로 평가 */
+#define WIFI_WATCHDOG_PERIOD_MS         (10 * 1000)            /* 10초 */
 static int  s_wifi_backoff_ms = WIFI_BACKOFF_INIT_MS;
-static int  s_wifi_fail_count = 0;
+static int  s_wifi_fail_count = 0;          /* 로그용 카운터 (트리거에는 사용 안 함) */
+static int64_t s_wifi_first_fail_us = 0;    /* 첫 실패 시각(esp_timer_get_time, us) */
+static int64_t s_wifi_boot_us = 0;          /* 부팅(핸들러 등록) 시각 */
+static int64_t s_mqtt_first_unreach_us = 0; /* WiFi 는 살아 있는데 MQTT 가 처음 죽은 시각 */
+static int64_t s_mqtt_wdg_last_log_us = 0;  /* MQTT-down 주기 로그(폭주 방지, esp_timer us) */
+static bool s_wifi_ever_got_ip = false;     /* 부팅 후 한 번이라도 IP 받았는가 */
 static esp_timer_handle_t s_wifi_reconnect_timer = NULL;
+static esp_timer_handle_t s_wifi_watchdog_timer = NULL;
+/* WiFi Provisioning 블록 아래에 정의됨 — 워치독 콜백이 먼저 컴파일되므로 전방 선언 */
+extern bool s_prov_in_progress;
+
+/* WiFi 자격을 NVS·WiFi 드라이버·prov manager 모두에서 깨끗이 정리하고 재부팅.
+ * - 우리 커스텀 NVS(mesh_ap_ssid/passwd)
+ * - WiFi 드라이버가 자체적으로 캐시한 NVS (esp_wifi_set_storage(WIFI_STORAGE_FLASH))
+ * - wifi_provisioning manager의 "provisioned" 플래그
+ */
+static void stella_clear_wifi_creds_and_reboot(const char *reason)
+{
+    ESP_LOGW(MESH_TAG, "[REPROV] Clearing WiFi credentials (reason: %s)", reason ? reason : "?");
+
+    /* 1) 커스텀 NVS 비우기 */
+    memset(mesh_ap_ssid, 0, sizeof(mesh_ap_ssid));
+    memset(mesh_ap_passwd, 0, sizeof(mesh_ap_passwd));
+    nvs_set_mesh_ap_ssid_passwd(mesh_ap_ssid, mesh_ap_passwd);
+
+    /* 2) WiFi 드라이버 자체 NVS 캐시 제거 (esp_wifi_set_storage(WIFI_STORAGE_FLASH) 대비) */
+    esp_err_t e = esp_wifi_restore();
+    if (e != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "[REPROV] esp_wifi_restore() => %s (무시 가능)", esp_err_to_name(e));
+    }
+
+    /* 3) wifi_provisioning manager가 "이미 provisioned"로 잡혀 BLE 광고가
+     *    안/늦게 뜨는 케이스 방지. (init/deinit 없이 호출 가능) */
+    wifi_prov_mgr_config_t cfg = {
+        .scheme = wifi_prov_scheme_ble,
+        .scheme_event_handler = WIFI_PROV_EVENT_HANDLER_NONE,
+    };
+    if (wifi_prov_mgr_init(cfg) == ESP_OK) {
+        wifi_prov_mgr_reset_provisioning();
+        wifi_prov_mgr_deinit();
+    }
+
+    ESP_LOGW(MESH_TAG, "[REPROV] Rebooting to start BLE provisioning ...");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+}
 
 static void wifi_reconnect_timer_cb(void *arg)
 {
@@ -1443,13 +1501,138 @@ static void wifi_reconnect_timer_init(void)
     esp_timer_create(&args, &s_wifi_reconnect_timer);
 }
 
+/* 보조 안전 타이머 — disconnect 이벤트와 무관하게 절대 시간으로 평가.
+ * 3가지 케이스 모두 감지:
+ *   (1) 부팅 후 IP 를 한 번도 못 받음 → 1분 뒤 재프로비저닝
+ *   (2) 정상 운용 중 WiFi 가 끊기고 IP 가 5분째 안 옴 → 재프로비저닝
+ *   (3) WiFi 는 붙었고 IP 도 있는데 MQTT(인터넷) 가 5분째 죽어 있음 → 재프로비저닝
+ *       (공유기 WAN 차단, DNS 실패, 브로커 다운 등) */
+static void wifi_watchdog_timer_cb(void *arg)
+{
+    (void)arg;
+    extern int flag_mqtt_connect;
+
+    /* 프로비저닝 진행 중이면 평가 안 함 */
+    if (s_prov_in_progress) return;
+
+    /* 웨어러블이 아니면 BLE 프로비저닝 자체가 준비 안 됨 → 평가 안 함 */
+    if (flag_IS_WEARABLE != 1) return;
+
+    /* SSID 가 비어 있으면 부팅 초기 분기에서 이미 프로비저닝 들어갔을 것이므로 평가 안 함 */
+    if (strlen((char *)mesh_ap_ssid) == 0) return;
+
+    int64_t now = esp_timer_get_time();
+
+    /* ───── 케이스 (3) — WiFi up + MQTT down ─────
+     *
+     * 변경: WiFi 자격은 멀쩡한데 MQTT/인터넷만 끊긴 상태에서 re-provisioning
+     *       (= NVS 자격 삭제 + 재부팅)을 트리거하면 오히려 부작용이 큼.
+     *       - 브로커/ISP 일시 장애마다 기기가 리부팅 → BLE 세션 단절
+     *       - "BLE 가 안 뜨고 계속 재부팅" 현상의 주요 트리거
+     *       - 자격을 지울 근거가 없음(= WiFi 는 정상 접속)
+     *
+     *       → 여기서는 **상태만 로깅**하고 MQTT 클라이언트의 auto-reconnect 에
+     *       복구를 맡긴다. 자격 삭제가 필요한 진짜 상황(AP 교체/비밀번호 변경)은
+     *       아래 케이스 (1)/(2) (IP 자체가 안 옴) 에서 처리된다.
+     */
+    if (s_current_ip.addr != 0) {
+        if (flag_mqtt_connect) {
+            /* 정상 — 모든 카운터 리셋 */
+            if (s_mqtt_first_unreach_us != 0) {
+                ESP_LOGW(MESH_TAG, "[WDG] MQTT recovered");
+            }
+            s_mqtt_first_unreach_us = 0;
+            s_mqtt_wdg_last_log_us = 0;
+            return;
+        }
+        /* WiFi 는 살아 있는데 MQTT 가 끊긴 상태 */
+        if (s_mqtt_first_unreach_us == 0) {
+            s_mqtt_first_unreach_us = now;
+            s_mqtt_wdg_last_log_us = now;
+            ESP_LOGW(MESH_TAG, "[WDG] WiFi up but MQTT down — observing (no reprov / no reboot)");
+            return;
+        }
+        int64_t mqtt_elapsed_us = now - s_mqtt_first_unreach_us;
+        if (mqtt_elapsed_us < 0 || mqtt_elapsed_us > (int64_t)7LL * 24 * 3600 * 1000000) {
+            ESP_LOGW(MESH_TAG, "[WDG] MQTT-down elapsed anomaly (%lld us) — reset marker",
+                     (long long)mqtt_elapsed_us);
+            s_mqtt_first_unreach_us = now;
+            s_mqtt_wdg_last_log_us = now;
+            return;
+        }
+        /* 60초마다 한 줄만(기존 (elapsed%%60000)<주기 는 의도와 달리 거의 매 틱에 찍힐 수 있음) */
+        if ((now - s_mqtt_wdg_last_log_us) < (int64_t)60 * 1000000) {
+            return;
+        }
+        s_mqtt_wdg_last_log_us = now;
+        {
+            int64_t mqtt_elapsed_ms = mqtt_elapsed_us / 1000;
+            int64_t sec            = mqtt_elapsed_ms / 1000;
+            int64_t h              = sec / 3600;
+            int64_t m              = (sec % 3600) / 60;
+            ESP_LOGW(MESH_TAG,
+                     "[WDG] MQTT down %lld ms (~%lld h %lld min, WiFi+IP up) — relying on auto-reconnect",
+                     (long long)mqtt_elapsed_ms, (long long)h, (long long)m);
+        }
+        return;
+    }
+
+    /* ───── 케이스 (1)(2) — IP 없음 ───── */
+    /* IP 끊긴 동안은 MQTT 타이머 리셋 */
+    s_mqtt_first_unreach_us = 0;
+    s_mqtt_wdg_last_log_us = 0;
+
+    /* 기준 시각: 부팅 후 한 번도 IP 가 안 왔다면 부팅 시각, 한 번이라도 받은 뒤 끊긴 경우엔 첫 실패 시각 */
+    int64_t ref_us;
+    int     threshold_ms;
+    const char *tag;
+    if (s_wifi_ever_got_ip) {
+        if (s_wifi_first_fail_us == 0) return;   /* 아직 끊긴 적 없음 */
+        ref_us = s_wifi_first_fail_us;
+        threshold_ms = WIFI_REPROV_TIMEOUT_RUNNING_MS;
+        tag = "5min(running)";
+    } else {
+        ref_us = s_wifi_boot_us ? s_wifi_boot_us : now;
+        threshold_ms = WIFI_REPROV_TIMEOUT_FIRST_MS;
+        tag = "1min(first)";
+    }
+
+    int64_t elapsed_ms = (now - ref_us) / 1000;
+    ESP_LOGW(MESH_TAG, "[WDG] no IP for %lldms / %dms [%s]", elapsed_ms, threshold_ms, tag);
+
+    if (elapsed_ms >= threshold_ms) {
+        ESP_LOGW(MESH_TAG, "[WDG] no IP for %lldms (>=%dms, %s) — re-provisioning",
+                 elapsed_ms, threshold_ms, tag);
+        stella_clear_wifi_creds_and_reboot(s_wifi_ever_got_ip ? "watchdog 5min"
+                                                              : "watchdog 1min(first)");
+    }
+}
+
+static void wifi_watchdog_timer_init(void)
+{
+    if (s_wifi_watchdog_timer) return;
+    s_wifi_boot_us = esp_timer_get_time();
+    const esp_timer_create_args_t args = {
+        .callback = wifi_watchdog_timer_cb,
+        .name = "wifi_wdg",
+    };
+    if (esp_timer_create(&args, &s_wifi_watchdog_timer) != ESP_OK) {
+        ESP_LOGE(MESH_TAG, "[WDG] create FAILED");
+        return;
+    }
+    esp_timer_start_periodic(s_wifi_watchdog_timer,
+                             (uint64_t)WIFI_WATCHDOG_PERIOD_MS * 1000);
+    ESP_LOGW(MESH_TAG, "[WDG] WiFi watchdog started (period=%dms, first=%dms, running=%dms)",
+             WIFI_WATCHDOG_PERIOD_MS,
+             WIFI_REPROV_TIMEOUT_FIRST_MS,
+             WIFI_REPROV_TIMEOUT_RUNNING_MS);
+}
+
 /** plain-STA WiFi 연결 해제 시 자동 재연결 — BLE 공존을 위해 지수 백오프 적용 */
 static void wifi_event_sta_disconnected_handler(void *arg, esp_event_base_t event_base,
                                                 int32_t event_id, void *event_data)
 {
     wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
-    ESP_LOGW(MESH_TAG, "<WIFI_EVENT_STA_DISCONNECTED> reason=%d, retry in %dms (fail %d/%d)",
-             disc->reason, s_wifi_backoff_ms, s_wifi_fail_count + 1, WIFI_REPROV_FAIL_COUNT);
 
     s_current_ip.addr = 0;
 
@@ -1459,15 +1642,26 @@ static void wifi_event_sta_disconnected_handler(void *arg, esp_event_base_t even
     }
 
     s_wifi_fail_count++;
+    if (s_wifi_first_fail_us == 0) {
+        s_wifi_first_fail_us = esp_timer_get_time();
+    }
+    int64_t elapsed_ms = (esp_timer_get_time() - s_wifi_first_fail_us) / 1000;
 
-    if (flag_IS_WEARABLE == 1 && s_wifi_fail_count >= WIFI_REPROV_FAIL_COUNT) {
-        ESP_LOGW(MESH_TAG, "WiFi failed %d times — clearing credentials for re-provisioning",
-                 s_wifi_fail_count);
-        memset(mesh_ap_ssid, 0, sizeof(mesh_ap_ssid));
-        memset(mesh_ap_passwd, 0, sizeof(mesh_ap_passwd));
-        nvs_set_mesh_ap_ssid_passwd(mesh_ap_ssid, mesh_ap_passwd);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        esp_restart();
+    /* 부팅 후 한 번도 IP 를 못 받았으면 1분, 한 번이라도 받았으면 5분 임계. */
+    int  threshold_ms = s_wifi_ever_got_ip ? WIFI_REPROV_TIMEOUT_RUNNING_MS
+                                           : WIFI_REPROV_TIMEOUT_FIRST_MS;
+    const char *threshold_tag = s_wifi_ever_got_ip ? "5min(running)" : "1min(first)";
+
+    ESP_LOGW(MESH_TAG, "<WIFI_EVENT_STA_DISCONNECTED> reason=%d, retry in %dms (fail #%d, elapsed %lldms / %dms [%s])",
+             disc->reason, s_wifi_backoff_ms, s_wifi_fail_count,
+             elapsed_ms, threshold_ms, threshold_tag);
+
+    /* 시간 임계 도달 → 재프로비저닝.
+     * (NO_AP_FOUND 같은 reason 별로 즉시 진입하지 않고, 오직 누적 시간만 본다.) */
+    if (flag_IS_WEARABLE == 1 && elapsed_ms >= threshold_ms) {
+        ESP_LOGW(MESH_TAG, "WiFi unreachable for %lldms (>=%dms, %s) — re-provisioning",
+                 elapsed_ms, threshold_ms, threshold_tag);
+        stella_clear_wifi_creds_and_reboot(s_wifi_ever_got_ip ? "timeout 5min" : "timeout 1min(first)");
         return;
     }
 
@@ -1605,7 +1799,10 @@ static void stella_wearable_start_provisioning(void)
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
     s_current_ip.addr = 1;
 
-    ESP_LOGW(MESH_TAG, "[PROV] Done! WiFi connected. Continuing to NimBLE + normal operation.");
+    ESP_LOGW(MESH_TAG, "[PROV] Done! WiFi connected. Rebooting in 1s for clean re-init ...");
+    /* 새 자격으로 connected 됐다는 건 이미 NVS에 저장 완료. 깨끗한 부팅으로 정상 운용 시작. */
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
 }
 /* ── WiFi Provisioning 끝 ──────────────────────────────────── */
 
@@ -1617,6 +1814,10 @@ void ip_event_handler(void *arg, esp_event_base_t event_base,
 
     s_wifi_backoff_ms = WIFI_BACKOFF_INIT_MS;
     s_wifi_fail_count = 0;
+    s_wifi_first_fail_us = 0;
+    s_wifi_ever_got_ip = true;     /* 한 번이라도 IP 받음 → 이후 끊김 임계는 5분 적용 */
+    s_mqtt_first_unreach_us = 0;   /* IP 새로 받음 → MQTT 끊김 카운터도 리셋 (실평가는 타이머에서) */
+    s_mqtt_wdg_last_log_us = 0;
 
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 
@@ -1831,6 +2032,74 @@ static int  register_view_tasks()
     return 0;
 }
 
+/* /data/agg_ring.bin 링버퍼: 미전송 5분 레코드 개수(pending) 등.
+ * 확장: 진단 카운터(updates/drops/ticks/stale/writes) + 활성화 플래그까지 출력. */
+static int do_agg_stats(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    const uint32_t uptime_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    uint32_t pending = 0, capacity = 0, read_idx = 0, write_idx = 0;
+    agg_buffer_get_stats(&pending, &capacity, &read_idx, &write_idx);
+    printf("diag: uptime=%" PRIu32 " s (esp_timer 부팅 기준·패닉/리셋 후 0부터; ESP 로그 I(ms)와 동일 출처)\n",
+           uptime_s);
+    printf("agg_ring %s: pending=%" PRIu32 " (saved, waiting for BLE flush) / max_slots=%" PRIu32 "\n",
+           AGG_RING_PATH, pending, capacity);
+    printf("read_idx=%" PRIu32 " write_idx=%" PRIu32 "\n", read_idx, write_idx);
+
+    agg_diag_t d;
+    agg_buffer_get_diag(&d);
+    printf("init_done=%s  history_on=%s  flushing=%s  registered_ids=%" PRIu32 "\n",
+           d.init_done ? "YES" : "NO",
+           d.enabled   ? "YES" : "NO",
+           d.flushing ? "YES" : "no",
+           d.registered_ids);
+    printf("mux flag_IS_WEARABLE=%d (1=wearable 0=static, from stella_main.c)\n", flag_IS_WEARABLE);
+    printf("early agg: ran=%s  last_fs=%s  last_agg(first_try)=%s  last_init_try=%s\n",
+           stella_early_agg_block_ran() ? "YES" : "NO",
+           esp_err_to_name(stella_early_agg_last_fs_err()),
+           esp_err_to_name(stella_early_agg_last_agg_err()),
+           esp_err_to_name(agg_buffer_get_last_init_error()));
+    printf("snapshot_task closed_windows=%" PRIu32 "  window_filled_sensor_slots=%" PRIu32 "  writes=%" PRIu32 "\n",
+           d.ticks, d.snap_count, d.writes);
+    printf("BLE notify_state=%d (0=미구독·5분마다 센서별 평균/링기록, 1=구독중→링 저장 안 함)\n",
+           notify_state ? 1 : 0);
+    printf("agg_latest_update: updates=%" PRIu32 "  drops(mutex)=%" PRIu32 "  stale(reserved)=%" PRIu32 "\n",
+           d.updates, d.drops, d.stale);
+    if (!d.init_done) {
+        printf("  → agg_buffer not fully started (init failed, still booting before heavy worker, or static PCB)\n");
+        if (flag_IS_WEARABLE == 0) {
+            printf("     hint: mux=static → 5분 히스토리 비활성 정상. 웨어러블이면 GPIO38/39 점검.\n");
+        } else {
+            printf("     hint: last_init_try=가장 최근 init 시도 코드. last_fs=ESP_OK면 SPIFFS/FAT는 이미 성공.\n");
+            printf("           ring/SQLite 또는 xTaskCreate(agg_snap|agg_flush) 실패 시 ESP_ERR_NO_MEM 등 확인.\n");
+            printf("           부팅 로그: early: agg_buffer_init / agg_buffer retry / ring_open_or_create\n");
+        }
+    } else if (!d.enabled) {
+        printf("  → init_done but history_off: unexpected (flag_IS_WEARABLE should be 1)\n");
+    } else if (d.ticks == 0) {
+        printf("  → closed_windows=0: 미구독(notify_state=0)으로 **연속** ~300초(설정: 15s×20) 지나야 첫 링 기록(창마다 평균).\n");
+        printf("     중간에 BLE notify 구독이 켜지면 창이 버려지고 타이머가 처음부터(로그: BLE went online during 5min window).\n");
+        printf("     uptime=%" PRIu32 " s, notify=%d — wall 10분이어도 부팅·init 이후 5분이 안 지났으면 pending=0 정상.\n",
+               uptime_s, notify_state ? 1 : 0);
+    } else if (d.updates == 0) {
+        printf("  → no sensor ever called ble_send_noti_* → agg_latest_update chain broken\n");
+    } else if (d.registered_ids == 0) {
+        printf("  → updates>0 but registered_ids==0 (race?); retry agg_stats\n");
+    }
+    return 0;
+}
+
+static int register_agg_stats(void) {
+    const esp_console_cmd_t cmd = {
+        .command = "agg_stats",
+        .help = "Show agg_buffer ring + diag counters (enabled/updates/drops/stale/writes)",
+        .hint = NULL,
+        .func = do_agg_stats,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+    return 0;
+}
+
 
 void  register_test_spi()
 {
@@ -1999,18 +2268,32 @@ void  register_autocalibration(void)
 }
 
 
+static int do_eventFlag_cmd(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    return eventFlag();
+}
+
 void  register_eventflag(void)
 {
     const  esp_console_cmd_t  cmd =  {
          .command =  "eventflag",
          .help    =  "event flag: ",
          .hint    =   NULL, 
-         .func    =   eventFlag,
+         .func    =   do_eventFlag_cmd,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 }
 
 
+
+static int do_readDB_cmd(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    return select_meter_1();
+}
 
 void  register_readDB(void)
 {
@@ -2018,7 +2301,7 @@ void  register_readDB(void)
         .command = "readDB",  
         .help    = "read db: ", 
         .hint    =  NULL,  
-        .func    = select_meter_1,
+        .func    = do_readDB_cmd,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));    
 }
@@ -2030,7 +2313,12 @@ int RespOK()
    return 0;
 }
 
-
+static int do_RespOK_cmd(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    return RespOK();
+}
 
 
 void  register_respOK(void)
@@ -2039,7 +2327,7 @@ void  register_respOK(void)
 		.command  =  "ready?",	
         .help     =  "ready: ", 
         .hint     =   NULL,  
-        .func     =   RespOK, 
+        .func     =   do_RespOK_cmd, 
 	 };
      ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));    
 }
@@ -2048,13 +2336,20 @@ void  register_respOK(void)
 
 
 
+static int do_readConstant_cmd(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    return (int)ReadConstant();
+}
+
 void  register_readConstant(void)
 {
    const esp_console_cmd_t  cmd =  {
          .command = "constant",
          .help    =  "read constant: ", 
          .hint    =  NULL,
-         .func    =  ReadConstant, 
+         .func    =  do_readConstant_cmd, 
    };
    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 }
@@ -2128,13 +2423,20 @@ void  register_setMeter(void)
 }
 
 
+static int do_testDma_cmd(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    return read_samples_with_dma();
+}
+
 void register_testDMA(void)
 {
      const esp_console_cmd_t cmd = {
         .command = "testDma",
         .help    = "test spi DMA:", 
 		.hint    =  NULL,     
-        .func    =  read_samples_with_dma,
+        .func    =  do_testDma_cmd,
 	 };
 	  ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 }
@@ -2397,13 +2699,7 @@ void register_setup_wifi_mesh_ap(void)
 
 static esp_err_t do_prov_reset(int argc, char **argv)
 {
-    ESP_LOGW(MESH_TAG, "Clearing WiFi credentials from NVS for re-provisioning...");
-    memset(mesh_ap_ssid, 0, sizeof(mesh_ap_ssid));
-    memset(mesh_ap_passwd, 0, sizeof(mesh_ap_passwd));
-    nvs_set_mesh_ap_ssid_passwd(mesh_ap_ssid, mesh_ap_passwd);
-    ESP_LOGW(MESH_TAG, "WiFi SSID/password cleared. Rebooting to start provisioning...");
-    vTaskDelay(pdMS_TO_TICKS(500));
-    esp_restart();
+    stella_clear_wifi_creds_and_reboot("manual prov_reset");
     return ESP_OK;
 }
 
@@ -2833,10 +3129,10 @@ static void initialize_console(void)
 
 #if CONFIG_CONSOLE_UART_NUM == 0
     /* Minicom, screen, idf_monitor send CR when ENTER key is pressed */
-    esp_vfs_dev_uart_port_set_rx_line_endings(0, ESP_LINE_ENDINGS_CR);
+    uart_vfs_dev_port_set_rx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, ESP_LINE_ENDINGS_CR);
 
     /* Move the caret to the beginning of the next line on '\n' */
-    esp_vfs_dev_uart_port_set_tx_line_endings(0, ESP_LINE_ENDINGS_CRLF);
+    uart_vfs_dev_port_set_tx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, ESP_LINE_ENDINGS_CRLF);
 
     /* Configure UART. Note that REF_TICK is used so that the baud rate remains
      * correct while APB frequency is changing in light sleep mode.
@@ -2858,7 +3154,7 @@ static void initialize_console(void)
     ESP_ERROR_CHECK(uart_param_config(CONFIG_ESP_CONSOLE_UART_NUM, &uart_config));
 
     /* Tell VFS to use UART driver */
-    esp_vfs_dev_uart_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
+    uart_vfs_dev_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
 #else
     ESP_LOGI(TAG, "UART console is disabled. ");
 #endif
@@ -2900,6 +3196,7 @@ const char *prompt = LOG_COLOR_I "esp32_mesh_iotech> " LOG_RESET_COLOR;
     register_ota_run_test();
     register_ota_stop();
     register_view_tasks();
+    register_agg_stats();
     register_setup_wifi_mesh_ap();
     register_prov_reset();
 	register_view_wifi_mesh_ap();
@@ -3573,11 +3870,13 @@ void app_main(void)
             /* 프로비저닝 완료 후 WiFi 이미 연결됨. 이후 정상 핸들러 등록. */
             ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip_event_handler, NULL));
             wifi_reconnect_timer_init();
+            wifi_watchdog_timer_init();
             ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
                                                        &wifi_event_sta_disconnected_handler, NULL));
         } else {
             ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip_event_handler, NULL));
             wifi_reconnect_timer_init();
+            wifi_watchdog_timer_init();
             ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
                                                        &wifi_event_sta_disconnected_handler, NULL));
             sprintf(g_hostname, "stella-%02X%02X%02X--%02X%02X%02X", MAC2STR(my_mac_factory));
@@ -4011,7 +4310,15 @@ void check_ADE9053a(void)
 		vTaskDelay(pdMS_TO_TICKS(1000));      //Hold low for 500 milliseconds  
 	}
 
-	xTaskCreate(app_measure,  "measure_task", 8192, 0,  0, &xTaskHandle_spi);
+#if CONFIG_SPIRAM && CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+	if (xTaskCreateWithCaps(app_measure, "measure_task", 8192, 0, 0, &xTaskHandle_spi,
+				MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS) {
+		/* stack in PSRAM */
+	} else
+#endif
+	{
+		xTaskCreate(app_measure, "measure_task", 8192, 0, 0, &xTaskHandle_spi);
+	}
 	vTaskDelete(NULL); // Delete this task after completion
 }
 

@@ -213,6 +213,11 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
         ESP_LOGI(TAG, "disconnected from peer; reason=%d",
                  event->disconnect.reason);
 
+        /* 링 끊김 시 SUBSCRIBE(0) 이벤트가 오지 않는 경우가 있어 여기서 정리.
+         * 그렇지 않으면 notify_state=1 이 남아 flush/notify 가 죽은 핸들로 시도될 수 있음. */
+        notify_state = false;
+        conn_handle = BLE_HS_CONN_HANDLE_NONE;
+
         /* Restart advertising */
         start_advertising();
         return rc;

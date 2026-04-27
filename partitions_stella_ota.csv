@@ -3,7 +3,8 @@
 # - otadata: OTA 슬롯 선택 상태 (필수)
 # - factory: 초기 출하/복구용 앱 (3MB)
 # - ota_0 / ota_1: 수동(passive) OTA 대상 슬롯 각 3MB — esp_https_ota 는 이 중 비활성 슬롯에 기록
-# - storage: 레이블 "storage", FAT — main/stella_main.c 의 esp_vfs_fat_spiflash_mount_rw_wl 과 동일
+# - spiffs: 레이블 "spiffs" — SQLite(power_data.db, agg_ring.db) + 콘솔 히스토리 (/spiffs/...)
+# - storage: 레이블 "storage", FAT — EXAMPLE_HISTORY_BACKEND_FAT 일 때 /data
 #
 # 앱 바이너리(.bin) 크기는 각 app 슬롯(3MB) 이하여야 함. 부트로더·파티션 테이블 갱신 후 전체 플래시 권장.
 #
@@ -14,4 +15,5 @@ phy_init, data, phy,     0x1f000,  0x1000,
 factory,  app,  factory, 0x20000,  0x300000,
 ota_0,    app,  ota_0,   0x320000, 0x300000,
 ota_1,    app,  ota_1,   0x620000, 0x300000,
-storage,  data, fat,     ,         0x6e0000,
+spiffs,   data, spiffs,  ,         0x100000,
+storage,  data, fat,     ,         0x5e0000,

@@ -17,8 +17,15 @@
 #include "driver/i2c_master.h"
 #include "esp_console.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 
 static const char *TAG = "cmd_i2ctools";
+
+static void *i2c_tools_malloc(size_t n)
+{
+    void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(n);
+}
 
 #define I2C_TOOL_TIMEOUT_VALUE_MS (50)
 static uint32_t i2c_frequency = 100 * 1000;
@@ -174,7 +181,7 @@ static int do_i2cget_cmd(int argc, char **argv)
     if (i2cget_args.data_length->count) {
         len = i2cget_args.data_length->ival[0];
     }
-    uint8_t *data = malloc(len);
+    uint8_t *data = (uint8_t *)i2c_tools_malloc((size_t)len);
 
     i2c_device_config_t i2c_dev_conf = {
         .scl_speed_hz = i2c_frequency,
@@ -262,7 +269,7 @@ static int do_i2cset_cmd(int argc, char **argv)
         return 1;
     }
 
-    uint8_t *data = malloc(len + 1);
+    uint8_t *data = (uint8_t *)i2c_tools_malloc((size_t)len + 1u);
     data[0] = data_addr;
     for (int i = 0; i < len; i++) {
         data[i + 1] = i2cset_args.data->ival[i];

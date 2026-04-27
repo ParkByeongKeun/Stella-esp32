@@ -4,9 +4,45 @@ menu "Example Configuration"
         bool "Store command history in flash"
         default y
         help
-            Linenoise line editing library provides functions to save and load
-            command history. If this option is enabled, initalizes a FAT filesystem
-            and uses it to store command history.
+            Enables persistent console history and wearable BLE 5-minute agg ring.
+            Actual storage backend is selected below (FAT partition "storage" or
+            SQLite on SPIFFS partition "spiffs" — see partitions_stella_ota.csv).
+
+    choice EXAMPLE_HISTORY_STORAGE_BACKEND
+        prompt "History / agg ring storage backend"
+        depends on EXAMPLE_STORE_HISTORY
+        default EXAMPLE_HISTORY_BACKEND_SQLITE
+        help
+            FAT: esp_vfs_fat on label "storage" (mount /data).
+            SQLite: SPIFFS on label "spiffs" (mount /spiffs), agg ring in /spiffs/agg_ring.db
+            — avoids FAT subtype / WL mismatches on mis-flashed devices.
+
+        config EXAMPLE_HISTORY_BACKEND_FAT
+            bool "FAT + wear levelling (/data)"
+
+        config EXAMPLE_HISTORY_BACKEND_SQLITE
+            bool "SQLite on SPIFFS (/spiffs)"
+    endchoice
+
+    config EXAMPLE_AGG_SQLITE_MAX_SLOTS
+        int "Agg ring max records (SQLite backend only)"
+        depends on EXAMPLE_STORE_HISTORY && EXAMPLE_HISTORY_BACKEND_SQLITE
+        range 256 65535
+        default 8192
+        help
+            Ring capacity in records. Each record is one sensor sample for one 5-minute window.
+            Lower values reduce SPIFFS flash wear and database size.
+
+    config EXAMPLE_AGG_SNAPSHOT_PERIOD_S
+        int "Wearable agg: offline window poll (seconds)"
+        depends on EXAMPLE_STORE_HISTORY
+        range 10 30
+        default 15
+        help
+            While BLE notify is off, snapshot_task sleeps in chunks of this many seconds
+            until 300 seconds elapse (one save window). Must divide 300 (e.g. 10, 12, 15, 20, 25, 30).
+            Smaller = faster detection if the app subscribes mid-window (discards partial window).
+            Per-sensor value is the first sample in the window (no averaging).
 
     config EXAMPLE_I2C_MASTER_SCL
         int "SCL GPIO Num"
@@ -493,6 +529,35 @@ menu "Example SNTP Configuration"
 
             bool "custom implementation"
     endchoice
+
+endmenu
+
+menu "Stella MQTT"
+
+    config STELLA_MQTT_DISABLE_LWT
+        bool "Disable MQTT Last Will (no broker offline on abrupt disconnect)"
+        default n
+        help
+            When enabled, the client does not register Last Will.
+            The broker will not publish a retained "offline" payload when TCP drops
+            (e.g. WiFi heap exhaustion). Use server-side idle timeout if you need death detection.
+            mqtt_app_reconnect() will also skip the explicit offline publish before client destroy.
+
+    config STELLA_MQTT_KEEPALIVE_SEC
+        int "MQTT keepalive interval (seconds)"
+        range 30 600
+        default 120
+        help
+            Longer interval reduces PING load and gives more slack before the broker
+            considers the session dead (when LWT is enabled).
+
+    config STELLA_MQTT_OUTBOX_LIMIT_KB
+        int "MQTT client outbox limit (KB, internal SRAM)"
+        range 4 32
+        default 8
+        help
+            Caps esp-mqtt outbox growth during disconnect. Lower frees contiguous internal
+            heap for WiFi/LWIP (helps wifi:mem fail under sensor load).
 
 endmenu
 

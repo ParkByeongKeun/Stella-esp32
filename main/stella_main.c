@@ -10,6 +10,8 @@
 #include "esp_log.h"
 #include "esp_console.h"
 #include "esp_vfs_fat.h"
+#include "esp_spiffs.h"
+#include "esp_partition.h"
 #include "cmd_system.h"
 #include "cmd_i2ctools.h"
 #include "driver/i2c_master.h"
@@ -19,6 +21,8 @@
 #include <cJSON.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
+#include "esp_heap_caps.h"
 #include "driver/uart_vfs.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
@@ -61,6 +65,25 @@ SemaphoreHandle_t sema_ble_send_noti = NULL;
 
 static const char *TAG = "i2c-tools";
 static uint32_t i2c_frequency = 100 * 1000;
+
+/* 큰 태스크 스택을 PSRAM에 두면 내부 DRAM 연속 블록이 남아 WiFi/MQTT 등에 유리함. 실패 시 기존 xTaskCreate로 폴백. */
+#if CONFIG_SPIRAM && CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+#define STELLA_PSRAM_STACK_CAPS (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#endif
+
+static BaseType_t stella_create_task_stack_prefer_psram(TaskFunction_t fn, const char *const name,
+                                                        uint32_t stack_bytes, void *const param,
+                                                        UBaseType_t prio, TaskHandle_t *const handle)
+{
+#if CONFIG_SPIRAM && CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+	BaseType_t r = xTaskCreateWithCaps(fn, name, stack_bytes, param, prio, handle, STELLA_PSRAM_STACK_CAPS);
+	if (r == pdPASS) {
+		return pdPASS;
+	}
+	ESP_LOGW("stella", "task \"%s\": PSRAM stack failed, using internal SRAM", name);
+#endif
+	return xTaskCreate(fn, name, stack_bytes, param, prio, handle);
+}
 int flag_CO2_autozero_close_run = 1;
 //  static uint32_t i2c_frequency = 100 * 1000;
 #define I2C_TOOL_TIMEOUT_VALUE_MS (50)
@@ -153,6 +176,8 @@ int send_date_json( void );
 extern int ble_send_noti_int(char *id, int value);
 extern int ble_send_noti_str(char *id, char* value);
 
+#include "agg_buffer.h"
+
 
 
 //  //  static gpio_num_t i2c_gpio_sda = CONFIG_EXAMPLE_I2C_MASTER_SDA;
@@ -172,8 +197,22 @@ static i2c_port_t i2c_port_i2c2 = I2C_NUM_1;
 
 #if CONFIG_EXAMPLE_STORE_HISTORY
 
+#if CONFIG_EXAMPLE_HISTORY_BACKEND_FAT
 #define MOUNT_PATH "/data"
 #define HISTORY_PATH MOUNT_PATH "/history.txt"
+#elif CONFIG_EXAMPLE_HISTORY_BACKEND_SQLITE
+#define HISTORY_PATH "/spiffs/console_history.txt"
+#endif
+
+/* heavy 내 early FAT+agg 블록이 실행됐는지 + 마지막 오류(agg_stats 진단용). */
+static bool s_early_agg_block_ran;
+static esp_err_t s_early_fs_err = ESP_ERR_INVALID_STATE;
+static esp_err_t s_early_agg_err = ESP_ERR_INVALID_STATE;
+
+/* FAT(/data) 또는 SPIFFS(/spiffs) 마운트 성공 — REPL 히스토리 경로 + agg 저장소 사용 가능. */
+static bool s_stella_fat_mounted;
+/* agg_buffer_init 재시도 태스크(한 번만 띄움). Wi-Fi 버퍼 할당 등으로 첫 init 이 실패할 때 대비. */
+static volatile bool s_agg_init_retry_spawned;
 
 #define CM1106_CO2_I2C_DEV_ADDR	    0x31 // I2C1
 #define PM2008_I2C_DEV_ADDR	        0x28 // I2C1
@@ -446,8 +485,27 @@ extern void register_nvs_set_str(void);
 //  }
 //  
 
-static void initialize_filesystem(void)
+#if CONFIG_EXAMPLE_HISTORY_BACKEND_FAT
+static esp_err_t initialize_filesystem(void)
 {
+    if (s_stella_fat_mounted) {
+        return ESP_OK;
+    }
+    {
+        const esp_partition_t *sp = esp_partition_find_first(
+            ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "storage");
+        if (!sp) {
+            ESP_LOGE(TAG, "partition table: no label \"storage\" — cannot mount /data");
+        } else {
+            ESP_LOGI(TAG, "partition \"storage\": subtype=%u size=0x%lx address=0x%lx",
+                     (unsigned)sp->subtype, (unsigned long)sp->size, (unsigned long)sp->address);
+            if (sp->subtype != ESP_PARTITION_SUBTYPE_DATA_FAT) {
+                ESP_LOGE(TAG, "storage is NOT FAT (subtype %u). esp_vfs_fat_spiflash_mount_rw_wl needs FAT. "
+                             "Flash with partitions_stella_ota.csv or erase+reflash partition table.",
+                         (unsigned)sp->subtype);
+            }
+        }
+    }
     static wl_handle_t wl_handle;
     const esp_vfs_fat_mount_config_t mount_config = {
         .max_files = 4,
@@ -455,11 +513,164 @@ static void initialize_filesystem(void)
     };
     esp_err_t err = esp_vfs_fat_spiflash_mount_rw_wl(MOUNT_PATH, "storage", &mount_config, &wl_handle);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mount FATFS (%s)", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to mount FATFS at %s (%s) — agg_buffer cannot use /data/agg_ring.bin",
+                 MOUNT_PATH, esp_err_to_name(err));
+        return err;
+    }
+    s_stella_fat_mounted = true;
+    ESP_LOGI(TAG, "FATFS mounted at %s (wearable history / console history)", MOUNT_PATH);
+    return ESP_OK;
+}
+#elif CONFIG_EXAMPLE_HISTORY_BACKEND_SQLITE
+static esp_err_t initialize_filesystem(void)
+{
+    if (s_stella_fat_mounted) {
+        return ESP_OK;
+    }
+    {
+        const esp_partition_t *sp = esp_partition_find_first(
+            ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "spiffs");
+        if (!sp) {
+            ESP_LOGE(TAG, "partition table: no label \"spiffs\" — add spiffs row to partitions_stella_ota.csv");
+        } else {
+            ESP_LOGI(TAG, "partition \"spiffs\": subtype=%u size=0x%lx address=0x%lx",
+                     (unsigned)sp->subtype, (unsigned long)sp->size, (unsigned long)sp->address);
+            if (sp->subtype != ESP_PARTITION_SUBTYPE_DATA_SPIFFS) {
+                ESP_LOGE(TAG, "\"spiffs\" is not SPIFFS subtype %u — use data,spiffs in partition CSV",
+                         (unsigned)sp->subtype);
+            }
+        }
+    }
+    size_t total = 0, used = 0;
+    if (esp_spiffs_info("spiffs", &total, &used) == ESP_OK) {
+        s_stella_fat_mounted = true;
+        ESP_LOGI(TAG, "SPIFFS /spiffs already mounted (total=%u used=%u)", (unsigned)total, (unsigned)used);
+        return ESP_OK;
+    }
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = "/spiffs",
+        .partition_label = "spiffs",
+        .max_files = 8,
+        .format_if_mount_failed = true,
+    };
+    esp_err_t err = esp_vfs_spiffs_register(&conf);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SPIFFS mount /spiffs failed (%s) — SQLite agg / console history unavailable",
+                 esp_err_to_name(err));
+        return err;
+    }
+    s_stella_fat_mounted = true;
+    ESP_LOGI(TAG, "SPIFFS mounted at /spiffs (SQLite agg_ring + meter DB + console history)");
+    return ESP_OK;
+}
+#else
+static esp_err_t initialize_filesystem(void)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+#endif /* backend */
+
+/* 첫 heavy 부팅에서 SPIFFS/FAT 마운트 또는 agg_buffer_init 이 실패하면(힙 부족 등)
+ * 조금씩 지연을 두고 백그라운드에서 재시도한다. */
+static void stella_agg_init_retry_task(void *arg)
+{
+    (void)arg;
+    const int delays_ms[] = { 3000, 8000, 15000, 30000, 45000, 60000 };
+    const unsigned n = sizeof(delays_ms) / sizeof(delays_ms[0]);
+    unsigned step = 0;
+
+    for (;;) {
+        int delay_ms = (step < n) ? delays_ms[step] : 120000;
+        if (step < n) {
+            step++;
+        }
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+
+        if (agg_buffer_is_initialized()) {
+            ESP_LOGI(TAG, "agg_buffer: init OK (retry task exit, step=%u)", step);
+            s_early_agg_err = ESP_OK;
+            break;
+        }
+        if (flag_IS_WEARABLE != 1) {
+            ESP_LOGW(TAG, "agg_retry: mux not wearable, stop");
+            break;
+        }
+
+        esp_err_t fe = initialize_filesystem();
+        if (fe != ESP_OK) {
+            ESP_LOGW(TAG, "agg_buffer retry step=%u: history VFS mount %s (heap=%u)",
+                     step, esp_err_to_name(fe), (unsigned)esp_get_free_heap_size());
+            continue;
+        }
+        esp_err_t ae = agg_buffer_init();
+        if (ae == ESP_ERR_NOT_SUPPORTED) {
+            break;
+        }
+        if (ae == ESP_OK) {
+            s_early_agg_err = ESP_OK;
+            ESP_LOGI(TAG, "agg_buffer_init OK on retry step=%u (heap=%u)",
+                     step, (unsigned)esp_get_free_heap_size());
+            break;
+        }
+        ESP_LOGW(TAG, "agg_buffer retry step=%u: agg_buffer_init %s (heap=%u)",
+                 step, esp_err_to_name(ae), (unsigned)esp_get_free_heap_size());
+    }
+    s_agg_init_retry_spawned = false;
+    vTaskDelete(NULL);
+}
+
+static void stella_maybe_spawn_agg_init_retry(esp_err_t fs_err, esp_err_t agg_err)
+{
+    if (agg_buffer_is_initialized()) {
         return;
+    }
+    if (s_agg_init_retry_spawned) {
+        return;
+    }
+    /* Static PCB: agg_buffer 는 의도적으로 비활성 — 재시도 불필요. */
+    if (agg_err == ESP_ERR_NOT_SUPPORTED) {
+        return;
+    }
+    if (fs_err == ESP_OK && agg_err == ESP_OK) {
+        return;
+    }
+    s_agg_init_retry_spawned = true;
+    BaseType_t ok = stella_create_task_stack_prefer_psram(stella_agg_init_retry_task, "agg_retry", 4096, NULL, 3, NULL);
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "agg_retry task create failed (heap=%u)", (unsigned)esp_get_free_heap_size());
+        s_agg_init_retry_spawned = false;
+    } else {
+        ESP_LOGW(TAG, "agg_buffer: scheduling background init retry (VFS mount or heap was not ready)");
     }
 }
 #endif // CONFIG_EXAMPLE_STORE_HISTORY
+
+bool stella_early_agg_block_ran(void)
+{
+#if CONFIG_EXAMPLE_STORE_HISTORY
+	return s_early_agg_block_ran;
+#else
+	return false;
+#endif
+}
+
+esp_err_t stella_early_agg_last_fs_err(void)
+{
+#if CONFIG_EXAMPLE_STORE_HISTORY
+	return s_early_fs_err;
+#else
+	return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+esp_err_t stella_early_agg_last_agg_err(void)
+{
+#if CONFIG_EXAMPLE_STORE_HISTORY
+	return s_early_agg_err;
+#else
+	return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
 
 char calc_PM2008_cks(uint8_t *data, int len)
 {
@@ -3741,7 +3952,7 @@ static void stella_spawn_heavy_worker(void)
 		return;
 	}
 	s_heavy_worker_spawned = true;
-	BaseType_t ok = xTaskCreate(stella_heavy_worker_task, "stella_heavy", STELLA_HEAVY_WORKER_STACK, NULL, 5, NULL);
+	BaseType_t ok = stella_create_task_stack_prefer_psram(stella_heavy_worker_task, "stella_heavy", STELLA_HEAVY_WORKER_STACK, NULL, 5, NULL);
 	if (ok != pdPASS) {
 		s_heavy_worker_spawned = false;
 		ESP_LOGE("stella", "stella_heavy worker xTaskCreate failed");
@@ -3831,6 +4042,37 @@ void stella_start_heavy_sensor_workloads(void)
 #endif
 #endif
 
+#if CONFIG_EXAMPLE_STORE_HISTORY
+	/* BLE·PDM·ADC 등 대형 태스크보다 먼저 히스토리 VFS(/data 또는 /spiffs) + agg_buffer 를 올린다.
+	 * 나중에 두면 Wi-Fi/NimBLE 힙 경쟁으로 xTaskCreate(agg_*) 가 실패해 init_done=NO 가 된다. */
+	{
+		s_early_agg_block_ran = true;
+		ESP_LOGI(TAG, "early agg: before BLE/sensors, heap=%u", (unsigned)esp_get_free_heap_size());
+		s_early_fs_err = initialize_filesystem();
+		if (s_early_fs_err != ESP_OK) {
+#if CONFIG_EXAMPLE_HISTORY_BACKEND_FAT
+			ESP_LOGE(TAG, "early: FAT /data mount failed: %s", esp_err_to_name(s_early_fs_err));
+#elif CONFIG_EXAMPLE_HISTORY_BACKEND_SQLITE
+			ESP_LOGE(TAG, "early: SPIFFS /spiffs mount failed: %s", esp_err_to_name(s_early_fs_err));
+#else
+			ESP_LOGE(TAG, "early: history VFS mount failed: %s", esp_err_to_name(s_early_fs_err));
+#endif
+			s_early_agg_err = s_early_fs_err;
+		} else {
+			s_early_agg_err = agg_buffer_init();
+			if (s_early_agg_err != ESP_OK && s_early_agg_err != ESP_ERR_NOT_SUPPORTED) {
+				ESP_LOGE(TAG, "early: agg_buffer_init failed: %s (heap=%u)",
+				         esp_err_to_name(s_early_agg_err), (unsigned)esp_get_free_heap_size());
+			} else if (s_early_agg_err == ESP_ERR_NOT_SUPPORTED) {
+				ESP_LOGI(TAG, "early: agg_buffer skipped (static)");
+			} else {
+				ESP_LOGI(TAG, "early: agg_buffer OK (heap=%u)", (unsigned)esp_get_free_heap_size());
+			}
+		}
+		stella_maybe_spawn_agg_init_retry(s_early_fs_err, s_early_agg_err);
+	}
+#endif
+
     if (!s_stella_ble_started) {
 		if (flag_IS_WEARABLE == 1) {
 			passkey_msg_handle = xMessageBufferCreate(passkey_msg_bytes);
@@ -3869,7 +4111,7 @@ void stella_start_heavy_sensor_workloads(void)
 	/* i2c_new_master_bus: 함수 앞부분에서 이미 수행됨 */
 
 //      xTaskCreate(i2c1_sensor_task, "i2c1_sensor", 4 * 1024, NULL, 8, NULL);
-    xTaskCreate(i2c1_i2c2_sensor_task, "i2c1_sensor", 8 * 1024, NULL, 8, NULL);
+    (void)stella_create_task_stack_prefer_psram(i2c1_i2c2_sensor_task, "i2c1_sensor", 8 * 1024, NULL, 8, NULL);
 
 //  	#if I2C2__USING_GPIO
 //      xTaskCreate(i2c2_sensor_task, "i2c2_sensor", 4 * 1024, NULL, 8, NULL); // Priority가 높다(너무 높아서 다른  Task가 동작하지 못했나 보다
@@ -3883,7 +4125,7 @@ void stella_start_heavy_sensor_workloads(void)
 //  	i2c2_sensor_task를 실행하면 I2S read buffer에 같은 값만 찍힌다.
 
 	printf("I2S PDM RX example start\n---------------------------\n");
-	xTaskCreate(i2s_example_pdm_rx_task, "pdm_rx", 4096+2048, NULL, 1, NULL); // + 2048
+	(void)stella_create_task_stack_prefer_psram(i2s_example_pdm_rx_task, "pdm_rx", 4096 + 2048, NULL, 1, NULL);
 //  //  	TaskHandle_t pdm_rx_task;
 //  //  	xTaskCreatePinnedToCore(i2s_example_pdm_rx_task, "pdm_rx", 4096+2048, NULL, 1, &pdm_rx_task, 1);
 //  //  	------------------------------------------------------------------------
@@ -3892,7 +4134,7 @@ void stella_start_heavy_sensor_workloads(void)
 //  	------------------------------------------------------------------------
 	if( flag_USE_W5500_Ethernet == 0 ) 
 	{
-	    xTaskCreate(spi2_adc_task, "adc_task", 4 * 1024, NULL, 8, NULL);
+	    (void)stella_create_task_stack_prefer_psram(spi2_adc_task, "adc_task", 4 * 1024, NULL, 8, NULL);
 	}
 //  	------------------------------------------------------------------------
 
@@ -3909,8 +4151,12 @@ void stella_start_heavy_sensor_workloads(void)
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
 
 #if CONFIG_EXAMPLE_STORE_HISTORY
-    initialize_filesystem();
-    repl_config.history_save_path = HISTORY_PATH;
+	/* 히스토리 VFS+agg 는 위에서 이미 시도함 — 여기서는 REPL 히스토리 파일 경로만 연결. */
+	if (s_stella_fat_mounted) {
+		repl_config.history_save_path = HISTORY_PATH;
+	} else {
+		repl_config.history_save_path = NULL;
+	}
 #endif
 
 //      repl_config.prompt = "i2c-tools>";
@@ -4119,7 +4365,7 @@ void app_main_stella(void)
 
 	extern bool s_prov_in_progress;
 	if (!s_stella_ble_started && !s_prov_in_progress) {
-		xTaskCreate(stella_early_ble_task, "early_ble", 16 * 1024, NULL, 5, NULL);
+		(void)stella_create_task_stack_prefer_psram(stella_early_ble_task, "early_ble", 16 * 1024, NULL, 5, NULL);
 	} else if (s_prov_in_progress) {
 		ESP_LOGW("stella", "BLE provisioning in progress, skip early BLE task");
 	}
