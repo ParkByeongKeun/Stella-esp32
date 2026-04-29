@@ -3012,6 +3012,42 @@ static inline uint8_t get_meas_cmd(sht4x_t *dev)
 	return 0;	// shcho add
 }
 
+/** SHT4x 측정 실패 시 가짜 온습도(-45/-6) 리포트 방지 + 연속 실패 시 소프트 RESET 후 1회 재측정 */
+#define SHT4X_MEAS_FAIL_STREAK_RESET 5
+
+static int stella_sht4x_read_measurement_loop(sht4x_t *dev, sht4x_raw_data_t resp, int *meas_fail_streak)
+{
+	xSemaphoreTake(sema_i2c2, portMAX_DELAY);
+	int rc = get_SHT4x_cmd_resp(dev, get_meas_cmd(dev), resp, sizeof(sht4x_raw_data_t));
+	xSemaphoreGive(sema_i2c2);
+
+	if (rc == 0) {
+		*meas_fail_streak = 0;
+		return 0;
+	}
+
+	(*meas_fail_streak)++;
+	ESP_LOGW(TAG, "SHT4x measure failed rc=%d (streak=%d)", rc, *meas_fail_streak);
+
+	if (*meas_fail_streak >= SHT4X_MEAS_FAIL_STREAK_RESET) {
+		ESP_LOGW(TAG, "SHT4x: soft RESET after %d consecutive failures", *meas_fail_streak);
+		xSemaphoreTake(sema_i2c2, portMAX_DELAY);
+		(void)get_SHT4x_cmd_resp(dev, SHT4X_CMD_RESET, resp, 0);
+		xSemaphoreGive(sema_i2c2);
+		vTaskDelay(pdMS_TO_TICKS(30));
+
+		xSemaphoreTake(sema_i2c2, portMAX_DELAY);
+		rc = get_SHT4x_cmd_resp(dev, get_meas_cmd(dev), resp, sizeof(sht4x_raw_data_t));
+		xSemaphoreGive(sema_i2c2);
+
+		*meas_fail_streak = (rc == 0) ? 0 : 1;
+		if (rc == 0) {
+			ESP_LOGW(TAG, "SHT4x: measurement OK after RESET");
+		}
+	}
+	return rc;
+}
+
 static esp_err_t sgp40_measure_raw_shcho(sgp40_t *dev, float humidity, float temperature, uint16_t *raw)
 {
 //  	CHECK_ARG(dev && raw);
@@ -3263,6 +3299,7 @@ void i2c1_i2c2_sensor_task(void *arg)
 
     vTaskDelay(100 / portTICK_PERIOD_MS);
 	float temperature, humidity;
+	static int s_sht4x_meas_fail_streak; /* 루프 간 유지: 연속 실패 시 RESET */
 //-------------------------------------------------------------------------------------------------
 
 
@@ -3323,24 +3360,29 @@ void i2c1_i2c2_sensor_task(void *arg)
 	
 			if( flag_SHT4x_is_OK == 1 && flag_SGP40_is_OK == 1 )
 			{
-				// 4. 온습도
-				xSemaphoreTake(sema_i2c2, portMAX_DELAY);
-					get_SHT4x_cmd_resp(&dev_sht4x, get_meas_cmd(&dev_sht4x), resp, sizeof(resp));
-				xSemaphoreGive(sema_i2c2);
-		
-		    	sht4x_compute_values_shcho(resp, &temperature, &humidity);
-				ESP_LOGW("sht4x Sensor", " %.2f °C, %.2f %%\n", temperature, humidity);
-		
-				// 5. 온습도 --> VOC Index
-				int32_t voc_index;
-				xSemaphoreTake(sema_i2c2, portMAX_DELAY);
-					sgp40_measure_voc_shcho(&dev_sgp40, humidity, temperature, &voc_index);
-				xSemaphoreGive(sema_i2c2);
-		
-				ESP_LOGI(TAG, "%.2f °C, %.2f %%, VOC index: %3" PRIi32 ", Air is [%s]",
-							temperature, humidity, voc_index, voc_index_name(voc_index));
-		
-				do_rht_voc_report(&dev_sht4x, &dev_sgp40, temperature, humidity, voc_index );
+				if (stella_sht4x_read_measurement_loop(&dev_sht4x, resp, &s_sht4x_meas_fail_streak) != 0) {
+					ESP_LOGW(TAG, "SHT4x: skip RHT/VOC report this cycle (bad or missing raw)");
+					vTaskDelay(pdMS_TO_TICKS(50));
+				} else {
+					// 4. 온습도 (raw 검증·RESET은 stella_sht4x_read_measurement_loop 에서 처리)
+					sht4x_compute_values_shcho(resp, &temperature, &humidity);
+					ESP_LOGW("sht4x Sensor", " %.2f °C, %.2f %%\n", temperature, humidity);
+
+					// 5. 온습도 --> VOC Index
+					int32_t voc_index;
+					xSemaphoreTake(sema_i2c2, portMAX_DELAY);
+					esp_err_t voc_err = sgp40_measure_voc_shcho(&dev_sgp40, humidity, temperature, &voc_index);
+					xSemaphoreGive(sema_i2c2);
+
+					if (voc_err != ESP_OK) {
+						ESP_LOGW(TAG, "SGP40 VOC measure failed %s — skip BLE RHT/VOC report",
+								 esp_err_to_name(voc_err));
+					} else {
+						ESP_LOGI(TAG, "%.2f °C, %.2f %%, VOC index: %3" PRIi32 ", Air is [%s]",
+								 temperature, humidity, voc_index, voc_index_name(voc_index));
+						do_rht_voc_report(&dev_sht4x, &dev_sgp40, temperature, humidity, voc_index);
+					}
+				}
 			}
 	
 	
@@ -3489,6 +3531,7 @@ void i2c2_sensor_task(void *arg) // Not used : i2c2 sensor :get value @ i2c1_i2c
 
     vTaskDelay(100 / portTICK_PERIOD_MS);
 	float temperature, humidity;
+	static int s_sht4x_meas_fail_streak_i2c2; /* i2c2_sensor_task 전용(현재 Task 미사용) */
 
 	while(1)
 	{
@@ -3545,24 +3588,26 @@ void i2c2_sensor_task(void *arg) // Not used : i2c2 sensor :get value @ i2c1_i2c
 
 		if( flag_SHT4x_is_OK == 1 && flag_SGP40_is_OK == 1 )
 		{
-			// 4. 온습도
-			xSemaphoreTake(sema_i2c2, portMAX_DELAY);
-				get_SHT4x_cmd_resp(&dev_sht4x, get_meas_cmd(&dev_sht4x), resp, sizeof(resp));
-			xSemaphoreGive(sema_i2c2);
-	
-	    	sht4x_compute_values_shcho(resp, &temperature, &humidity);
-			ESP_LOGW("sht4x Sensor", " %.2f °C, %.2f %%\n", temperature, humidity);
-	
-			// 5. 온습도 --> VOC Index
-			int32_t voc_index;
-			xSemaphoreTake(sema_i2c2, portMAX_DELAY);
-				sgp40_measure_voc_shcho(&dev_sgp40, humidity, temperature, &voc_index);
-			xSemaphoreGive(sema_i2c2);
-	
-			ESP_LOGI(TAG, "%.2f °C, %.2f %%, VOC index: %3" PRIi32 ", Air is [%s]",
-						temperature, humidity, voc_index, voc_index_name(voc_index));
-	
-			do_rht_voc_report(&dev_sht4x, &dev_sgp40, temperature, humidity, voc_index );
+			if (stella_sht4x_read_measurement_loop(&dev_sht4x, resp, &s_sht4x_meas_fail_streak_i2c2) != 0) {
+				ESP_LOGW(TAG, "SHT4x(i2c2_task): skip RHT/VOC report (bad raw)");
+				vTaskDelay(pdMS_TO_TICKS(50));
+			} else {
+				sht4x_compute_values_shcho(resp, &temperature, &humidity);
+				ESP_LOGW("sht4x Sensor", " %.2f °C, %.2f %%\n", temperature, humidity);
+
+				int32_t voc_index;
+				xSemaphoreTake(sema_i2c2, portMAX_DELAY);
+				esp_err_t voc_err = sgp40_measure_voc_shcho(&dev_sgp40, humidity, temperature, &voc_index);
+				xSemaphoreGive(sema_i2c2);
+
+				if (voc_err != ESP_OK) {
+					ESP_LOGW(TAG, "SGP40(i2c2_task) VOC failed %s — skip report", esp_err_to_name(voc_err));
+				} else {
+					ESP_LOGI(TAG, "%.2f °C, %.2f %%, VOC index: %3" PRIi32 ", Air is [%s]",
+							 temperature, humidity, voc_index, voc_index_name(voc_index));
+					do_rht_voc_report(&dev_sht4x, &dev_sgp40, temperature, humidity, voc_index);
+				}
+			}
 		}
 
 
