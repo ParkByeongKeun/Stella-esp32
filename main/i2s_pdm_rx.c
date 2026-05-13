@@ -41,6 +41,7 @@ uint16_t peak_u16[2];
 #define EXAMPLE_PDM_RX_FREQ_HZ          16000
 
 #ifndef PDM_MIC_SENS_DBFS_AT_94DB_SPL
+/* Infineon IM72D128V01: 1 kHz, 94 dBSPL → typ −36 dBFS (min/max −37/−35). DS v01_00 */
 #define PDM_MIC_SENS_DBFS_AT_94DB_SPL  (-36.0f)
 #endif
 
@@ -70,9 +71,8 @@ static uint32_t s_pdm_strongest_last_print_ms;
 #define DMA_BUF_BYTES               (1024)
 
 /*
- * JSON / MQTT / BLE 발행 주기 (ms).
- * 웨어러블은 ble_send_noti_float("PDM_avg", spl_ui) 만 사용 — S_0_10 아님.
- * PDM JSON/BLE/서버 전송 주기(기본 5s). 빌드 시 -DPDM_BLE_PERIOD_MS=… 로 변경 가능.
+ * JSON / MQTT / BLE 발행 주기 (ms, 기본 5s).
+ * PDM_avg 는 spl_db_est. -DPDM_BLE_PERIOD_MS=… 로 변경 가능.
  */
 #ifndef PDM_BLE_PERIOD_MS
 #define PDM_BLE_PERIOD_MS           (5000)
@@ -83,20 +83,67 @@ static uint32_t s_pdm_strongest_last_print_ms;
 #ifndef PDM_SPL_UI_EXTRA_DB
 #define PDM_SPL_UI_EXTRA_DB         (-12.0f)
 #endif
+/*
+ * 필드에서 소음계와 일치용 일괄 보정(dB). PDM_MIC_SENS 이 데이터시트와 맞을수록 0에 가깝게.
+ * IM72D128(−36 dBFS@94) 기준 시작값은 대략 −14; IM70D122(−26) 쓸 때는 −DPDM_SPL_METER_OFFSET_DB=-4 등으로 빌드 조정.
+ */
+#ifndef PDM_SPL_METER_OFFSET_DB
+#define PDM_SPL_METER_OFFSET_DB     (-14.0f)
+#endif
 #ifndef PDM_RX_AMPLIFY_NUM
-#define PDM_RX_AMPLIFY_NUM          (1)
+#define PDM_RX_AMPLIFY_NUM          (8)
+#endif
+/*
+ * dBFS/SPL 계산 전 파형 스케일(1.0=비변경). 1 미만이면 레벨 전체를 내려 디지털 클리핑 여유 확보.
+ * 조용한데도 peak≈32767이면 0.5~0.25 시도 후 PDM_SPL_METER_OFFSET_DB 재조정.
+ */
+#ifndef PDM_RX_WAVEFORM_SCALE
+#define PDM_RX_WAVEFORM_SCALE       (1.0f)
+#endif
+#ifndef PDM_CLIP_WARN_THRESH
+#define PDM_CLIP_WARN_THRESH        (31000u)
 #endif
 #define PDM_SPL_BLEND_RMS_W         (0.55f)
 #define PDM_SPL_BLEND_PEAKDB_W      (0.45f)
 #define PDM_SPL_CREST_DB_GAIN       (0.15f)
 #define PDM_SPL_CREST_DB_CAP        (22.0f)
+/* 1: SPL/PDM_avg 는 구간 피크 dBFS만 사용(타자 등 단발 소리 반응). 0: 예전처럼 RMS·피크 블렌드 */
+#ifndef PDM_SPL_DBFS_PEAK_ONLY
+#define PDM_SPL_DBFS_PEAK_ONLY      (1)
+#endif
 #define PDM_LED_FREQ_HZ_MIN         (40.0f)
 
 #ifndef PDM_RX_SLOT_CHOICE
-#define PDM_RX_SLOT_CHOICE          (2)
+/*
+ * IM70 등 단일 DIN 모노 PDM: LEFT(0) 또는 RIGHT(1) 중 실제로 유효한 슬롯을 써야 함.
+ * BOTH(2)는 L/R 2채널로 읽어 한 채널이 비어 보이면 레벨·스윙이 매우 작게 나올 수 있음(58~64에 수렴하는 원인 후보).
+ */
+#define PDM_RX_SLOT_CHOICE          (0)
 #endif
 #if (PDM_RX_SLOT_CHOICE < 0) || (PDM_RX_SLOT_CHOICE > 2)
 #error "PDM_RX_SLOT_CHOICE must be 0 (LEFT), 1 (RIGHT), or 2 (BOTH)"
+#endif
+/*
+ * 배경 dBFS에 대한 상대 변화만 배율 적용 → BLE PDM_avg 스윙 확대(물리 소음계와 1:1 아님, UI용).
+ * 1.0=끔. IM70+ESP에서 전기 신호가 1~2 dB만 움직일 때 체감용. -DPDM_SPL_DBFS_EXCURSION_GAIN=1 로 원복 가능.
+ */
+#ifndef PDM_SPL_DBFS_EXCURSION_GAIN
+#define PDM_SPL_DBFS_EXCURSION_GAIN     (4.0f)
+#endif
+#ifndef PDM_SPL_DBFS_AMBIENT_EMA_ALPHA
+/* 높을수록 배경 추적이 느림 → 피크는 그대로인데 PDM_avg만 분 단위로 서서히 내려가는 현상 유발 */
+#define PDM_SPL_DBFS_AMBIENT_EMA_ALPHA (0.988f)
+#endif
+#ifndef PDM_SPL_DBFS_AMBIENT_EMA_ALPHA_FAST_DN
+/* inst < 배경일 때(조용해짐) 빠르게 내려가게 */
+#define PDM_SPL_DBFS_AMBIENT_EMA_ALPHA_FAST_DN (0.88f)
+#endif
+#ifndef PDM_SPL_DB_EST_MAX
+#define PDM_SPL_DB_EST_MAX             (125.0f)
+#endif
+/* BLE `PDM_avg` / JSON `PDM_Avg_SPL_dB_est` 에 더해지는 최종 오프셋(dB). 음수면 전체를 내림. */
+#ifndef PDM_SPL_REPORT_TRIM_DB
+#define PDM_SPL_REPORT_TRIM_DB         (-15.0f)
 #endif
 
 // END USER SETUP
@@ -148,6 +195,9 @@ static volatile bool s_pdm_snap_ready;
 static float s_pdm_period_peak_dbfs = -120.0f;
 static float s_pdm_period_rms_sum = 0.0f;
 static uint32_t s_pdm_period_rms_n = 0;
+static uint32_t s_pdm_last_clip_warn_ms;
+static int16_t s_pdm_scaled_i16[FFT_BUF_SAMPLES];
+static float s_dbfs_frame_ambient_ema = -55.0f;
 
 void disp_buf(uint8_t* buf, size_t length);
 void disp_avg_buf(uint8_t* buf, size_t length, uint16_t *avg);
@@ -307,6 +357,9 @@ void task_send_JSON (void* arg)
 		const bool have = s_pdm_snap_ready;
 		if (have) {
 			pdm_msg = s_pdm_snap;
+			/* snap.avg_dbfs 는 FFT 직후에만 갱신되어 한 프레임 늦을 수 있음.
+			 * 구간(연속 JSON 전송 사이) 최대 레벨은 항상 s_pdm_period_peak_dbfs 가 정본. */
+			pdm_msg.avg_dbfs = s_pdm_period_peak_dbfs;
 			s_pdm_period_peak_dbfs = -120.0f;
 			if (s_pdm_period_rms_n > 0) {
 				rms_mean_dbfs = s_pdm_period_rms_sum / (float)s_pdm_period_rms_n;
@@ -321,6 +374,10 @@ void task_send_JSON (void* arg)
 			continue;
 		}
 
+#if PDM_SPL_DBFS_PEAK_ONLY
+		/* pdm_msg.avg_dbfs = 구간 내 프레임별 loudness dBFS 최대(피크). RMS 평균은 배경에 끌려 내려감 */
+		const float dbfs_for_ui = pdm_msg.avg_dbfs;
+#else
 		float crest_db = pdm_msg.avg_dbfs - rms_mean_dbfs;
 		if (crest_db < 0.0f) {
 			crest_db = 0.0f;
@@ -331,32 +388,54 @@ void task_send_JSON (void* arg)
 		const float dbfs_for_ui = PDM_SPL_BLEND_RMS_W * rms_mean_dbfs
 			+ PDM_SPL_BLEND_PEAKDB_W * pdm_msg.avg_dbfs
 			+ PDM_SPL_CREST_DB_GAIN * crest_db;
-		const float dbfs_cal = dbfs_for_ui + PDM_SPL_UI_EXTRA_DB;
-		const float spl_ui = pdm_heuristic_spl_ui(dbfs_cal);
-		const float spl_db_est = 94.0f + dbfs_cal - PDM_MIC_SENS_DBFS_AT_94DB_SPL;
+#endif
+#if PDM_SPL_DBFS_PEAK_ONLY
+		(void)rms_mean_dbfs;
+#endif
+		float dbfs_for_meter = dbfs_for_ui;
+		if (PDM_SPL_DBFS_EXCURSION_GAIN > 1.0005f) {
+			float amb = -55.0f;
+			portENTER_CRITICAL(&s_pdm_snap_lock);
+			amb = s_dbfs_frame_ambient_ema;
+			portEXIT_CRITICAL(&s_pdm_snap_lock);
+			float exc = dbfs_for_ui - amb;
+			if (exc < 0.0f) {
+				exc = 0.0f;
+			}
+			dbfs_for_meter = amb + exc * PDM_SPL_DBFS_EXCURSION_GAIN;
+		}
+		const float dbfs_cal = dbfs_for_meter + PDM_SPL_UI_EXTRA_DB;
+		const float spl_ui = pdm_heuristic_spl_ui(dbfs_for_ui + PDM_SPL_UI_EXTRA_DB);
+		float spl_db_est = 94.0f + dbfs_cal - PDM_MIC_SENS_DBFS_AT_94DB_SPL
+			+ PDM_SPL_METER_OFFSET_DB;
+		if (spl_db_est > PDM_SPL_DB_EST_MAX) {
+			spl_db_est = PDM_SPL_DB_EST_MAX;
+		}
+		spl_db_est += PDM_SPL_REPORT_TRIM_DB;
 
 		char pdm_avg_str[16];
 		memset(pdm_avg_str, 0, sizeof(pdm_avg_str));
-		snprintf(pdm_avg_str, sizeof(pdm_avg_str), "%.3f", (double)spl_ui);
+		snprintf(pdm_avg_str, sizeof(pdm_avg_str), "%.3f", (double)spl_db_est);
 
 		{
-		    ESP_LOGD(JSON_TAG, "Serialize.....PDM_Result");
-		    cJSON *root = cJSON_CreateObject();
-	    	cJSON_AddStringToObject(root, "Board_Serial_Num", my_mac_str);
-		   	cJSON_AddNumberToObject(root, "PDM_BIN_WIDTH_HZ", BIN_WIDTH_HZ);
-		   	cJSON_AddNumberToObject(root, "PDM_Strongest_Hz", pdm_msg.strongest_Hz);
-		   	cJSON_AddNumberToObject(root, "PDM_Avg(raw)", pdm_msg.avg);
-		   	cJSON_AddStringToObject(root, "PDM_Avg", pdm_avg_str);
-		   	cJSON_AddNumberToObject(root, "PDM_Avg_SPL_ui", spl_ui);
-		   	cJSON_AddNumberToObject(root, "PDM_Avg_dBFS", dbfs_for_ui);
-		   	cJSON_AddNumberToObject(root, "PDM_Avg_SPL_dB_est", spl_db_est);
-		   	cJSON_AddNumberToObject(root, "PDM_Peak", pdm_msg.peak);
+			ESP_LOGD(JSON_TAG, "Serialize.....PDM_Result");
+			cJSON *root = cJSON_CreateObject();
+			cJSON_AddStringToObject(root, "Board_Serial_Num", my_mac_str);
+			cJSON_AddNumberToObject(root, "PDM_BIN_WIDTH_HZ", BIN_WIDTH_HZ);
+			cJSON_AddNumberToObject(root, "PDM_Strongest_Hz", pdm_msg.strongest_Hz);
+			cJSON_AddNumberToObject(root, "PDM_Avg(raw)", pdm_msg.avg);
+			cJSON_AddStringToObject(root, "PDM_Avg", pdm_avg_str);
+			cJSON_AddNumberToObject(root, "PDM_Avg_SPL_ui", spl_ui);
+			cJSON_AddNumberToObject(root, "PDM_Avg_dBFS", dbfs_for_meter);
+			cJSON_AddNumberToObject(root, "PDM_Avg_dBFS_int_max", dbfs_for_ui);
+			cJSON_AddNumberToObject(root, "PDM_Avg_SPL_dB_est", spl_db_est);
+			cJSON_AddNumberToObject(root, "PDM_Peak", pdm_msg.peak);
 
-		    char *my_json_string = cJSON_Print(root);
-		   	ESP_LOGD("FAN", "my_json_string\n%s", my_json_string);
+			char *my_json_string = cJSON_Print(root);
+			ESP_LOGD("FAN", "my_json_string\n%s", my_json_string);
 
 			ble_send_noti_float("PDM_Hz", pdm_msg.strongest_Hz);
-			ble_send_noti_float("PDM_avg", spl_ui);
+			ble_send_noti_float("PDM_avg", spl_db_est);
 			ble_send_noti_int("PDM_peak", (int)pdm_msg.peak);
 
 			if (flag_IS_WEARABLE == 0) {
@@ -368,7 +447,7 @@ void task_send_JSON (void* arg)
 				send_to_server(my_json_string, strlen(my_json_string));
 				xSemaphoreGive(sema_tcp);
 			}
-		   	cJSON_Delete(root);
+			cJSON_Delete(root);
 			free(my_json_string);
 		}
 	}
@@ -386,20 +465,65 @@ void task_process (void* arg)
         assert(rx_bytes == sizeof(buf_idx));
 
         buf = &PDMDataBuffer[buf_idx * FFT_BUF_BYTES];
+        const int16_t *raw_i16 = (const int16_t *)buf;
+        uint32_t raw_peak_abs = 0;
+        for (size_t ri = 0; ri < FFT_BUF_SAMPLES; ri++) {
+            int32_t v = (int32_t)raw_i16[ri];
+            uint32_t a = (uint32_t)(v >= 0 ? v : -v);
+            if (a > raw_peak_abs) {
+                raw_peak_abs = a;
+            }
+        }
+        {
+            uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            if (raw_peak_abs >= PDM_CLIP_WARN_THRESH
+                && (now_ms - s_pdm_last_clip_warn_ms) >= 2000U) {
+                ESP_LOGW("i2s_pdm",
+                         "waveform near full scale (raw_peak=%u). SPL 스윙 없으면 포화 의심 → scale 낮추기/HW게인. scale=%.3f amplify=%u",
+                         (unsigned)raw_peak_abs, (double)PDM_RX_WAVEFORM_SCALE,
+                         (unsigned)PDM_RX_AMPLIFY_NUM);
+                s_pdm_last_clip_warn_ms = now_ms;
+            }
+        }
+
+        const int16_t *meter_src = raw_i16;
+        if (fabsf(PDM_RX_WAVEFORM_SCALE - 1.0f) > 1e-5f) {
+            const float g = PDM_RX_WAVEFORM_SCALE;
+            for (size_t i = 0; i < FFT_BUF_SAMPLES; i++) {
+                int32_t v = (int32_t)((float)raw_i16[i] * g);
+                if (v > 32767) {
+                    v = 32767;
+                } else if (v < -32768) {
+                    v = -32768;
+                }
+                s_pdm_scaled_i16[i] = (int16_t)v;
+            }
+            meter_src = s_pdm_scaled_i16;
+        }
 #ifdef DEBUG_PRINT_RAW
         disp_buf(buf, FFT_BUF_BYTES);
 #endif
 #ifdef DEBUG_PRINT_AVG
         disp_avg_buf(buf, FFT_BUF_BYTES, &avg_u16[buf_idx]);
 #endif
-        calc_avg_peak_buf(buf, FFT_BUF_BYTES, &avg_u16[buf_idx], &peak_u16[buf_idx]);
+        calc_avg_peak_buf((uint8_t *)meter_src, FFT_BUF_BYTES, &avg_u16[buf_idx], &peak_u16[buf_idx]);
 
-		const float inst_dbfs = pdm_loudness_dbfs_meter((const int16_t *)buf, FFT_BUF_SAMPLES);
-		const float frame_rms_dbfs = pdm_rms_dbfs_ac((const int16_t *)buf, FFT_BUF_SAMPLES);
+		const float inst_pk = pdm_peak_dbfs(meter_src, FFT_BUF_SAMPLES);
+		const float inst_loud = pdm_loudness_dbfs_meter(meter_src, FFT_BUF_SAMPLES);
+		const float inst_dbfs = fmaxf(inst_pk, inst_loud);
+
+		const float frame_rms_dbfs = pdm_rms_dbfs_ac(meter_src, FFT_BUF_SAMPLES);
 		portENTER_CRITICAL(&s_pdm_snap_lock);
 		s_pdm_period_peak_dbfs = fmaxf(s_pdm_period_peak_dbfs, inst_dbfs);
 		s_pdm_period_rms_sum += frame_rms_dbfs;
 		s_pdm_period_rms_n++;
+		{
+			float a = PDM_SPL_DBFS_AMBIENT_EMA_ALPHA;
+			if (inst_dbfs < s_dbfs_frame_ambient_ema) {
+				a = PDM_SPL_DBFS_AMBIENT_EMA_ALPHA_FAST_DN;
+			}
+			s_dbfs_frame_ambient_ema = a * s_dbfs_frame_ambient_ema + (1.0f - a) * inst_dbfs;
+		}
 		portEXIT_CRITICAL(&s_pdm_snap_lock);
 
         fft_config_t *real_fft_plan = fft_init(FFT_BUF_SAMPLES, FFT_REAL, FFT_FORWARD, NULL, NULL);

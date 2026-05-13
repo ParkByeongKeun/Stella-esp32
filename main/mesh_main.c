@@ -2100,6 +2100,42 @@ static int register_agg_stats(void) {
     return 0;
 }
 
+/* BLE 오프라인 히스토리 링 비우기 — agg_buffer_reset() */
+static int do_agg_clear(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    if (flag_IS_WEARABLE != 1) {
+        printf("agg_clear: wearable 아님(flag_IS_WEARABLE!=1) — 히스토리 링 없음\n");
+        return 1;
+    }
+    if (!agg_buffer_is_initialized()) {
+        printf("agg_clear: agg_buffer 미초기화(agg_stats 또는 부팅 로그 확인)\n");
+        return 1;
+    }
+    if (agg_buffer_is_flushing()) {
+        printf("agg_clear: 경고 — BLE 히스토리 flush 중이었음; 링은 그대로 삭제됩니다.\n");
+    }
+    uint32_t pending_before = 0, cap = 0, r = 0, w = 0;
+    agg_buffer_get_stats(&pending_before, &cap, &r, &w);
+    printf("agg_clear: %s 지우는 중… (이전 pending=%" PRIu32 ")\n", AGG_RING_PATH, pending_before);
+    agg_buffer_reset();
+    uint32_t pending_after = 0;
+    agg_buffer_get_stats(&pending_after, &cap, &r, &w);
+    printf("agg_clear: 완료. pending=%" PRIu32 " (0이면 비었음)\n", pending_after);
+    return 0;
+}
+
+static int register_agg_clear(void) {
+    const esp_console_cmd_t cmd = {
+        .command = "agg_clear",
+        .help = "Clear BLE offline history ring (agg_buffer_reset; wearable only)",
+        .hint = NULL,
+        .func = do_agg_clear,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+    return 0;
+}
+
 
 void  register_test_spi()
 {
@@ -3197,6 +3233,7 @@ const char *prompt = LOG_COLOR_I "esp32_mesh_iotech> " LOG_RESET_COLOR;
     register_ota_stop();
     register_view_tasks();
     register_agg_stats();
+    register_agg_clear();
     register_setup_wifi_mesh_ap();
     register_prov_reset();
 	register_view_wifi_mesh_ap();
